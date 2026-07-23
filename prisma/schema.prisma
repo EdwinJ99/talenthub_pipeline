@@ -1,0 +1,273 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                String  @id
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String?
+  access_token      String?
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String?
+  session_state     String?
+  User              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Session {
+  id           String   @id
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  User         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model User {
+  id          String    @id @default(cuid())
+  name        String?
+  email       String    @unique
+  password    String
+  phoneNumber String?
+  role        Role      @default(ADMIN)
+  Account     Account[]
+  Session     Session[]
+}
+
+model items {
+  id         Int       @id @default(autoincrement())
+  name       String    @default("")
+  qty        Int       @default(0)
+  status     String    @default("")
+  created_at DateTime? @default(now()) @db.Timestamp(6)
+  updated_at DateTime? @default(now()) @db.Timestamp(6)
+  price      Int?      @default(0)
+}
+
+model mst_brand {
+  brd_id      Int           @id @default(autoincrement())
+  brd_initial String?       @db.VarChar(5)
+  brd_nama    String?       @db.VarChar(100)
+  brd_alamat  String?       @db.VarChar(100)
+  brd_email   String?       @db.VarChar(100)
+  brd_notelp  String?       @db.VarChar(15)
+  brd_pic1    String?       @db.VarChar(100)
+  brd_pic2    String?       @db.VarChar(100)
+  brd_pic3    String?       @db.VarChar(100)
+  brd_status  Int?          @default(1)
+  creaby      String?       @db.VarChar(20)
+  creadate    DateTime?     @default(now()) @db.Timestamp(6)
+  modiby      String?       @db.VarChar(20)
+  modidate    DateTime?     @default(now()) @db.Timestamp(6)
+  trs_project trs_project[]
+}
+
+model mst_payment {
+  pyt_id      Int           @id @default(autoincrement())
+  pyt_bank    String?       @db.VarChar(100)
+  pyt_norek   String?       @db.VarChar(100)
+  pyt_nama    String?       @db.VarChar(100)
+  pyt_status  Int?          @default(1)
+  creaby      String?       @db.VarChar(20)
+  creadate    DateTime?     @default(now()) @db.Timestamp(6)
+  modiby      String?       @db.VarChar(20)
+  modidate    DateTime?     @default(now()) @db.Timestamp(6)
+  trs_project trs_project[]
+}
+
+model mst_sow {
+  sow_id      Int           @id @default(autoincrement())
+  sow_nama    String?       @db.VarChar(100)
+  sow_status  Int?          @default(1)
+  creaby      String?       @db.VarChar(20)
+  creadate    DateTime?     @default(now()) @db.Timestamp(6)
+  modiby      String?       @db.VarChar(20)
+  modidate    DateTime?     @default(now()) @db.Timestamp(6)
+  dtl_project dtl_project[]
+}
+
+model dtl_project {
+  drf_id              Int            @id @default(autoincrement())
+  drf_projectid       Int
+  drf_sow             Int?
+  drf_rate            Decimal?       @db.Decimal(12, 2)
+  drf_qty             Int?
+  drf_planning_upload DateTime?      @db.Date
+  drf_actual_upload   DateTime?      @db.Date
+  drf_link_content    String?
+  drf_status          Int?           @default(0)
+  creaby              String?        @db.VarChar(20)
+  creadate            DateTime?      @default(now()) @db.Timestamp(6)
+  modiby              String?        @db.VarChar(20)
+  modidate            DateTime?      @default(now()) @db.Timestamp(6)
+  drf_creatorid       Int
+  drf_markup_price    Decimal?       @db.Decimal(12, 2)
+  detail_report       detail_report?
+  mst_creators        mst_creators   @relation(fields: [drf_creatorid], references: [id], map: "fk_dtl_project_creator")
+  mst_sow             mst_sow?       @relation(fields: [drf_sow], references: [sow_id], onDelete: Restrict, onUpdate: NoAction, map: "fk_dtl_project_to_sow")
+  trs_project         trs_project    @relation(fields: [drf_projectid], references: [prj_id], onDelete: Cascade, onUpdate: NoAction, map: "fk_dtl_project_to_trs")
+}
+
+model detail_report {
+  id             Int         @id @default(autoincrement())
+  dtl_project_id Int         @unique
+  content_url    String
+  platform       String      @db.VarChar(20)
+  caption        String?
+  thumbnail_url  String?
+  likes          Int         @default(0)
+  comments       Int         @default(0)
+  saves          Int         @default(0)
+  reposts        Int         @default(0)
+  views          Int         @default(0)
+  plays          Int         @default(0)
+  duration       Float       @default(0)
+  shares         Int         @default(0)
+  performance    Float       @default(0)
+  scraped_at     DateTime    @default(now()) @db.Timestamp(6)
+  created_at     DateTime    @default(now()) @db.Timestamp(6)
+  updated_at     DateTime    @default(now()) @updatedAt @db.Timestamp(6)
+  dtl_project    dtl_project @relation(fields: [dtl_project_id], references: [drf_id], onDelete: Cascade, onUpdate: NoAction, map: "fk_detail_report_project_detail")
+
+  @@index([dtl_project_id], map: "idx_detail_report_project_detail")
+}
+
+model mst_categories {
+  id           Int            @id @default(autoincrement())
+  name         String         @db.VarChar(100)
+  status       Int?           @default(1) @db.SmallInt
+  created_at   DateTime?      @default(now()) @db.Timestamp(6)
+  mst_creators mst_creators[]
+}
+
+model mst_cities {
+  id           Int            @id @default(autoincrement())
+  name         String         @db.VarChar(100)
+  status       Int?           @default(1) @db.SmallInt
+  created_at   DateTime?      @default(now()) @db.Timestamp(6)
+  mst_creators mst_creators[]
+}
+
+model mst_dbest {
+  bst_id     Int       @id @default(autoincrement())
+  bst_nama   String?   @db.VarChar(100)
+  bst_alamat String?   @db.VarChar(100)
+  bst_status Int?      @default(1)
+  creaby     String?   @db.VarChar(20)
+  creadate   DateTime? @default(now()) @db.Timestamp(6)
+  modiby     String?   @db.VarChar(20)
+  modidate   DateTime? @default(now()) @db.Timestamp(6)
+}
+
+model mst_general_filters {
+  id     Int    @id @default(autoincrement())
+  type   String @db.VarChar(50)
+  name   String @db.VarChar(100)
+  status Int?   @default(1) @db.SmallInt
+}
+
+model trs_project {
+  prj_id          Int           @id @default(autoincrement())
+  prj_brand       Int
+  prj_nama        String        @db.VarChar(100)
+  prj_quotationno String?       @db.VarChar(100)
+  prj_invoiceno   String?       @db.VarChar(100)
+  prj_dstartdate  DateTime      @db.Date
+  prj_denddate    DateTime      @db.Date
+  prj_qstartdate  DateTime?     @db.Date
+  prj_qenddate    DateTime?     @db.Date
+  prj_rstartdate  DateTime?     @db.Date
+  prj_renddate    DateTime?     @db.Date
+  prj_istartdate  DateTime?     @db.Date
+  prj_ienddate    DateTime?     @db.Date
+  prj_status      Int           @default(1)
+  creaby          String        @db.VarChar(20)
+  creadate        DateTime      @default(now()) @db.Timestamp(6)
+  modiby          String?       @db.VarChar(20)
+  modidate        DateTime?     @default(now()) @db.Timestamp(6)
+  prj_kode        String        @unique(map: "uq_project_kode") @db.VarChar(20)
+  prj_paymentid   Int?
+  prj_sheet_sync  DateTime?     @db.Timestamp(6)
+  prj_sheetid     String?       @db.VarChar(150)
+  prj_sheeturl    String?
+  dtl_project     dtl_project[]
+  mst_brand       mst_brand     @relation(fields: [prj_brand], references: [brd_id], map: "fk_trs_project_brand")
+  mst_payment     mst_payment?  @relation(fields: [prj_paymentid], references: [pyt_id], onUpdate: NoAction, map: "fk_trs_project_payment")
+}
+
+model mst_creators {
+  id                 Int                 @id @default(autoincrement())
+  name               String              @db.VarChar(150)
+  username           String              @db.VarChar(100)
+  photo_url          String?
+  followers          Int?                @default(0)
+  total_post         Int?                @default(0)
+  engagement_rate    Decimal?            @default(0.00) @db.Decimal(5, 2)
+  average_view       Int?                @default(0)
+  average_view_brand Int?                @default(0)
+  cpv_all            Decimal?            @default(0.00) @db.Decimal(12, 2)
+  cpv_branded        Decimal?            @default(0.00) @db.Decimal(12, 2)
+  social_media       String              @db.VarChar(50)
+  tier               String              @db.VarChar(50)
+  gender             String              @db.VarChar(10)
+  city_id            Int?
+  category_id        Int?
+  last_scraped_at    DateTime?           @default(now()) @db.Timestamp(6)
+  created_at         DateTime?           @default(now()) @db.Timestamp(6)
+  updated_at         DateTime?           @default(now()) @db.Timestamp(6)
+  following          Int?                @default(0)
+  avg_likes          Int?                @default(0)
+  avg_comments       Int?                @default(0)
+  top_hashtags       Json?               @default("[]")
+  top_mentions       Json?               @default("[]")
+  dtl_creator_posts  dtl_creator_posts[]
+  dtl_project        dtl_project[]
+  mst_categories     mst_categories?     @relation(fields: [category_id], references: [id], onUpdate: NoAction, map: "fk_creator_category")
+  mst_cities         mst_cities?         @relation(fields: [city_id], references: [id], onUpdate: NoAction, map: "fk_creator_city")
+
+  @@unique([username, social_media], map: "uq_creator_username_platform")
+  @@index([social_media, tier, gender, city_id, category_id], map: "idx_creators_filter")
+}
+
+model dtl_creator_posts {
+  id            Int          @id @default(autoincrement())
+  creator_id    Int
+  post_url      String?
+  caption       String?
+  likes         Int?         @default(0)
+  comments      Int?         @default(0)
+  views         Int?         @default(0)
+  category_ai   String?      @db.VarChar(100)
+  is_endorse    Boolean      @default(false)
+  posted_at     DateTime?    @db.Timestamp(6)
+  scraped_at    DateTime     @default(now()) @db.Timestamp(6)
+  thumbnail_url String?
+  mst_creators  mst_creators @relation(fields: [creator_id], references: [id], onDelete: Cascade, map: "fk_post_creator")
+
+  @@unique([creator_id, posted_at, caption], name: "uq_creator_post", map: "uq_creator_post")
+  @@index([creator_id, is_endorse], map: "idx_post_creator_endorse")
+}
+
+model stg_discovered_usernames {
+  id                Int       @id @default(autoincrement())
+  username          String    @db.VarChar(100)
+  social_media      String    @db.VarChar(50)
+  source_creator_id Int?
+  status            String    @default("pending") @db.VarChar(20)
+  discovered_at     DateTime  @default(now()) @db.Timestamp(6)
+  validated_at      DateTime?
+
+  @@unique([username, social_media], map: "uq_discovered_username_platform")
+}
+
+enum Role {
+  ADMIN
+}
