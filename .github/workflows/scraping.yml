@@ -1,0 +1,36 @@
+name: Scraping Pipeline
+
+on:
+  schedule:
+    # Jalan otomatis setiap 4 jam sekali
+    - cron: '0 */4 * * *'
+  # Memungkinkan untuk di-trigger manual lewat tombol di GitHub Actions
+  workflow_dispatch:
+
+jobs:
+  run-pipeline:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma Client
+        run: npx prisma generate
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+
+      - name: Run Pipeline Script
+        run: npx tsx scripts/run-pipeline.ts
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          APIFY_TOKEN: ${{ secrets.APIFY_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
