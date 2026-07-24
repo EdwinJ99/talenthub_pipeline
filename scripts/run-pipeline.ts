@@ -1,9 +1,16 @@
 import 'dotenv/config';
-import { readFileSync } from 'fs';
 import { processCreator, prisma, SeedEntry } from '../lib/pipeline';
 
 async function main() {
-  const seed: SeedEntry[] = JSON.parse(readFileSync('data/seed-creators.json', 'utf-8'));
+  const allCreators = await prisma.mst_creators.findMany({
+    select: { username: true, social_media: true },
+  });
+
+  const seed: SeedEntry[] = allCreators.map(c => ({
+    username: c.username,
+    platform: c.social_media as 'instagram' | 'tiktok',
+  }));
+
   console.log(`Total ${seed.length} akun akan diproses`);
 
   const results = { success: 0, skipped: 0, error: 0 };
