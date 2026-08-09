@@ -1,17 +1,33 @@
 import 'dotenv/config';
 import { processCreator, prisma, SeedEntry } from '../lib/pipeline';
 
+const REFRESH_INTERVAL_DAYS = 7; // sesuai kesepakatan: refresh tiap 7 hari
+
 async function main() {
-  const allCreators = await prisma.mst_creators.findMany({
-    select: { username: true, social_media: true },
+  const cutoffDate = new Date();
+  cutoffDate.setDate(cutoffDate.getDate() - REFRESH_INTERVAL_DAYS);
+
+  // Cuma ambil creator yang:
+  // - belum pernah di-scrape sama sekali (last_scraped_at masih null), ATAU
+  // - terakhir di-scrape SUDAH LEBIH dari REFRESH_INTERVAL_DAYS hari yang lalu
+  const dueCreators = await prisma.mst_creators.findMany({
+    where: {
+      OR: [
+        { last_scraped_at: null },
+        { last_scraped_at: { lt: cutoffDate } },
+      ],
+    },
+    select: { username: true, social_media: true, last_scraped_at: true },
   });
 
-  const seed: SeedEntry[] = allCreators.map(c => ({
+  const seed: SeedEntry[] = dueCreators.map(c => ({
     username: c.username,
     platform: c.social_media as 'instagram' | 'tiktok',
   }));
 
-  console.log(`Total ${seed.length} akun akan diproses`);
+  console.log(
+    `Total ${seed.length} akun jatuh tempo untuk di-refresh (interval ${REFRESH_INTERVAL_DAYS} hari)`
+  );
 
   const results = { success: 0, skipped: 0, error: 0 };
 

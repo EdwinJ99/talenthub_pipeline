@@ -1,13 +1,26 @@
-import { PrismaClient, Prisma } from '@prisma/client';
-import { scrapeInstagramProfiles, scrapeTiktokProfiles, RawPost } from './apify';
-import { detectEndorsePosts, suggestNewUsernames, checkIndonesianLocation, classifyAccountCategory, detectGender } from './gemini';
-import { computeInsightsFromPosts } from './insights';
+import { PrismaClient, Prisma } from "@prisma/client";
+import {
+  scrapeInstagramProfileDetails,
+  scrapeInstagramPosts,
+  scrapeTiktokProfiles,
+  RawPost,
+  RawProfile,
+} from "./apify";
+import {
+  detectEndorsePosts,
+  suggestNewUsernames,
+  checkIndonesianLocation,
+  classifyAccountCategory,
+  detectGender,
+} from "./gemini";
+import { computeInsightsFromPosts } from "./insights";
 
 const prisma = new PrismaClient();
 
 export interface SeedEntry {
   username: string;
-  platform: 'instagram' | 'tiktok';
+  platform: "instagram" | "tiktok";
+  category?: string;
 }
 
 function average(nums: number[]): number {
@@ -16,10 +29,10 @@ function average(nums: number[]): number {
 }
 
 function calculateTier(followers: number): string {
-  if (followers >= 1_000_000) return 'Mega';
-  if (followers >= 100_000) return 'Macro';
-  if (followers >= 10_000) return 'Micro';
-  return 'Nano';
+  if (followers >= 1_000_000) return "Mega";
+  if (followers >= 100_000) return "Macro";
+  if (followers >= 10_000) return "Micro";
+  return "Nano";
 }
 
 function mostCommonLocation(posts: RawPost[]): string | null {
@@ -31,80 +44,129 @@ function mostCommonLocation(posts: RawPost[]): string | null {
   let best: string | null = null;
   let bestCount = 0;
   for (const [name, count] of counts) {
-    if (count > bestCount) { best = name; bestCount = count; }
+    if (count > bestCount) {
+      best = name;
+      bestCount = count;
+    }
   }
   return best;
 }
 
-export async function processCreator(entry: SeedEntry) {
+const MIN_FOLLOWERS = 5000;
+
+export async function processCreator(
+  entry: SeedEntry,
+  preScrapedProfile?: RawProfile
+) {
   console.log(`\n--- ${entry.username} (${entry.platform}) ---`);
 
-  // 1. Scrape (Apify)
-  const profiles =
-    entry.platform === 'instagram'
-      ? await scrapeInstagramProfiles([entry.username])
-      : await scrapeTiktokProfiles([entry.username]);
+  // 1. Scrape PROFIL DULU AJA (murah — 1 request untuk IG, TikTok tetap gabung)
+  const profile =
+    preScrapedProfile ??
+    (entry.platform === "instagram"
+      ? (await scrapeInstagramProfileDetails([entry.username]))[0]
+      : (await scrapeTiktokProfiles([entry.username]))[0]);
 
-  const profile = profiles[0];
   if (!profile || !profile.isValid) {
-    console.log('  [SKIP] username tidak valid/tidak ditemukan');
-    return { status: 'skipped', username: entry.username };
+    console.log("  [SKIP] username tidak valid/tidak ditemukan");
+    return { status: "skipped", username: entry.username };
+  }
+
+  // 1b. Filter minimal follower — di sini, akun yang kekecilan
+  //     BELUM sempat kena request postingan sama sekali (untuk IG).
+  if (profile.followers < MIN_FOLLOWERS) {
+    console.log(
+      `  [SKIP] ${profile.username} — follower ${profile.followers} < ${MIN_FOLLOWERS}`
+    );
+    return { status: "skipped", username: entry.username };
+  }
+
+  // 1c. Baru sekarang narik postingan — HANYA untuk akun yang sudah lolos
+  //     validitas + minimal follower. TikTok sudah otomatis punya posts
+  //     dari step 1 (nggak perlu request tambahan).
+  if (entry.platform === "instagram" && profile.posts.length === 0) {
+    profile.posts = await scrapeInstagramPosts(profile.username);
   }
 
   // 2. Cek lokasi Indonesia (Gemini)
-  const locationCheck = await checkIndonesianLocation(profile.bio ?? '', profile.posts);
+  const locationCheck = await checkIndonesianLocation(
+    profile.bio ?? "",
+    profile.posts
+  );
   if (!locationCheck.isIndonesian) {
-    console.log(`  [SKIP] ${profile.username} — kemungkinan bukan akun Indonesia`);
-    return { status: 'skipped', username: entry.username };
+    console.log(
+      `  [SKIP] ${profile.username} — kemungkinan bukan akun Indonesia`
+    );
+    return { status: "skipped", username: entry.username };
   }
 
   let cityId: number | undefined;
   const topLocation = mostCommonLocation(profile.posts);
-  const cityNameToSearch = topLocation ?? locationCheck.cityGuess; // prioritas: lokasi post, fallback: tebakan Gemini dari bio
+  const cityNameToSearch = topLocation ?? locationCheck.cityGuess;
 
   if (cityNameToSearch) {
     const city = await prisma.mst_cities.findFirst({
-      where: { name: { contains: cityNameToSearch, mode: 'insensitive' } },
+      where: { name: { contains: cityNameToSearch, mode: "insensitive" } },
     });
     cityId = city?.id;
   }
 
-  // 3. Klasifikasi kategori akun (Gemini) — bikin baru di mst_categories kalau belum ada
+  // 3. Klasifikasi kategori akun (Gemini)
   const existingCategories = await prisma.mst_categories.findMany();
   const chosenCategoryName = await classifyAccountCategory(
     profile.username,
-    profile.bio ?? '',
+    profile.bio ?? "",
     profile.posts,
-    existingCategories.map(c => c.name)
+    existingCategories.map((c) => c.name)
   );
 
-  const gender = await detectGender(profile.username, profile.username, profile.bio ?? '');
+  const gender = await detectGender(
+    profile.username,
+    profile.username,
+    profile.bio ?? ""
+  );
   console.log(`  [AI] gender: ${gender}`);
 
   const category =
     existingCategories.find(
-      c => c.name.toLowerCase() === chosenCategoryName.toLowerCase()
+      (c) => c.name.toLowerCase() === chosenCategoryName.toLowerCase()
     ) ??
-    (await prisma.mst_categories.create({ data: { name: chosenCategoryName } }));
+    (await prisma.mst_categories.create({
+      data: { name: chosenCategoryName },
+    }));
 
   console.log(`  [AI] kategori: ${category.name}`);
 
   // 4. Deteksi endorse vs konten asli (Gemini)
-  const endorseResults = await detectEndorsePosts(profile.username, profile.posts);
+  const endorseResults = await detectEndorsePosts(
+    profile.username,
+    profile.posts
+  );
 
   // 5. Hitung metrics
   const engagementRates = profile.posts.map((p: RawPost) =>
-    profile.followers > 0 ? ((p.likes + p.comments) / profile.followers) * 100 : 0
+    profile.followers > 0
+      ? ((p.likes + p.comments) / profile.followers) * 100
+      : 0
   );
   const avgEngagement = average(engagementRates);
 
-  const allViews = profile.posts.map((p: RawPost) => p.views ?? 0).filter((v: number) => v > 0);
+  const videoPosts = profile.posts.filter(
+    (p: RawPost) => p.views !== undefined && p.views > 0
+  );
+  const allViews = videoPosts.map((p: RawPost) => p.views as number);
   const avgView = average(allViews);
+  console.log(
+    `  [INFO] ${videoPosts.length}/${profile.posts.length} post punya data views (video/Reels)`
+  );
 
-  const brandedViews = profile.posts
-    .filter((_: RawPost, i: number) => endorseResults.find(e => e.index === i)?.isEndorse)
-    .map((p: RawPost) => p.views ?? 0)
-    .filter((v: number) => v > 0);
+  const brandedVideoPosts = profile.posts.filter(
+    (p: RawPost, i: number) =>
+      endorseResults.find((e) => e.index === i)?.isEndorse &&
+      p.views !== undefined &&
+      p.views > 0
+  );
+  const brandedViews = brandedVideoPosts.map((p: RawPost) => p.views as number);
   const avgViewBrand = average(brandedViews);
 
   const tier = calculateTier(profile.followers);
@@ -118,7 +180,10 @@ export async function processCreator(entry: SeedEntry) {
   // 6. Insert/update ke mst_creators
   const creator = await prisma.mst_creators.upsert({
     where: {
-      username_social_media: { username: profile.username, social_media: profile.socialMedia },
+      username_social_media: {
+        username: profile.username,
+        social_media: profile.socialMedia,
+      },
     },
     update: {
       followers: profile.followers,
@@ -161,7 +226,11 @@ export async function processCreator(entry: SeedEntry) {
     },
   });
 
-  console.log(`  [OK] creator id ${creator.id}, tier ${tier}, engagement ${avgEngagement.toFixed(2)}%`);
+  console.log(
+    `  [OK] creator id ${
+      creator.id
+    }, tier ${tier}, engagement ${avgEngagement.toFixed(2)}%`
+  );
 
   // 7. Insert/update tiap post
   let savedPosts = 0;
@@ -182,7 +251,8 @@ export async function processCreator(entry: SeedEntry) {
           views: p.views,
           post_url: p.postUrl,
           thumbnail_url: p.thumbnailUrl,
-          is_endorse: endorseResults.find(e => e.index === i)?.isEndorse ?? false,
+          is_endorse:
+            endorseResults.find((e) => e.index === i)?.isEndorse ?? false,
         },
         create: {
           creator_id: creator.id,
@@ -192,7 +262,8 @@ export async function processCreator(entry: SeedEntry) {
           views: p.views,
           post_url: p.postUrl,
           thumbnail_url: p.thumbnailUrl,
-          is_endorse: endorseResults.find(e => e.index === i)?.isEndorse ?? false,
+          is_endorse:
+            endorseResults.find((e) => e.index === i)?.isEndorse ?? false,
           posted_at: new Date(p.postedAt),
         },
       });
@@ -204,7 +275,10 @@ export async function processCreator(entry: SeedEntry) {
   console.log(`  [OK] ${savedPosts}/${profile.posts.length} post tersimpan`);
 
   // 8. Cari username baru dari bio/mention
-  const newUsernames = await suggestNewUsernames(profile.bio ?? '', profile.posts);
+  const newUsernames = await suggestNewUsernames(
+    profile.bio ?? "",
+    profile.posts
+  );
   for (const username of newUsernames) {
     await prisma.stg_discovered_usernames.upsert({
       where: {
@@ -219,10 +293,12 @@ export async function processCreator(entry: SeedEntry) {
     });
   }
   if (newUsernames.length > 0) {
-    console.log(`  [+] ${newUsernames.length} username baru ditemukan, masuk staging`);
+    console.log(
+      `  [+] ${newUsernames.length} username baru ditemukan, masuk staging`
+    );
   }
 
-  return { status: 'success', username: entry.username, creatorId: creator.id };
+  return { status: "success", username: entry.username, creatorId: creator.id };
 }
 
 export { prisma };
