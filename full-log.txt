@@ -1,0 +1,168 @@
+=== [Flow 2] Discover username trending baru ===
+Total username existing: 82
+  Gagal (status 429) pakai gemini-flash-lite-latest (key index 0)
+  [GEMINI] Key index 0 kena limit. Rotasi ke key berikutnya...
+  Gagal (status 429) pakai gemini-flash-lite-latest (key index 1)
+  [GEMINI] Key index 1 kena limit. Rotasi ke key berikutnya...
+  Gagal (status 429) pakai gemini-flash-lite-latest (key index 2)
+  [GEMINI] Key index 2 kena limit. Rotasi ke key berikutnya...
+  Gagal (status 429) pakai gemini-flash-lite-latest (key index 3)
+  [GEMINI] Key index 3 kena limit. Rotasi ke key berikutnya...
+  Semua key/model gagal dengan grounding, coba fallback TANPA grounding...
+Gemini menyarankan 5 kandidat:
+  - @clarakarina (instagram) — Content creator kecantikan dan lifestyle yang konsisten trending dengan ulasan produk yang jujur.
+  - @chandukw (tiktok) — Kreator konten komedi dan sketsa keseharian yang sedang viral di FYP.
+  - @fellexandro (instagram) — Praktisi bisnis dan kreator konten edukasi produktivitas yang sangat populer di kalangan anak muda.
+  - @gilangalkatiri (tiktok) — Kreator konten POV dan komedi situasi yang interaktif dan digemari Gen Z.
+  - @alexiswijaya (instagram) — Food vlogger yang sedang naik daun berkat ulasan kuliner hidden gem yang autentik.
+Validasi 3 kandidat Instagram via Apify...
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:17.836Z [33mACTOR: [39mPulling container image of build QBBXeFfdh0OoH2hsG from registry.
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:17.838Z [33mACTOR: [39mCreating container.
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:17.911Z [33mACTOR: [39mStarting container.
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:17.912Z [33mACTOR: [39mRunning under "LIMITED_PERMISSIONS".
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:18.589Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v24.19.0"}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:18.759Z [32mINFO[39m  [Status message]: Starting the scraper with 3 direct URL(s)
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:18.981Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:20.379Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:20.379Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":1}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:20.403Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:20.404Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":1}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:21.699Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:21.700Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"1ScYt7ZDCvzBZv4","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=fellexandro","retryCount":1}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:24.593Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:24.593Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":2}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:25.183Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:25.184Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":2}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:30.086Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:30.087Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"1ScYt7ZDCvzBZv4","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=fellexandro","retryCount":2}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:33.898Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:33.899Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":3}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:35.695Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:35.696Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"1ScYt7ZDCvzBZv4","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=fellexandro","retryCount":3}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:39.770Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:39.771Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":4}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:41.296Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:41.296Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"1ScYt7ZDCvzBZv4","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=fellexandro","retryCount":4}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:44.141Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:44.141Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":5}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:53.097Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:53.603Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":3,"requestsFailed":0,"retryHistogram":[null,null,1,null,1,1],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":4125,"requestsFinishedPerMinute":5,"requestsFailedPerMinute":0,"requestTotalDurationMillis":12376,"requestsTotal":3,"crawlerRuntimeMillis":34795}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:53.603Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 3 requests: 3 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36minstagram-scraper runId:n5IShD3YDOuLhOgv3 -> [39m2026-08-11T14:29:53.604Z [32mINFO[39m  [Status message]: Scraper finished
+Validasi 2 kandidat TikTok via Apify...
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:57.356Z [33mACTOR: [39mPulling container image of build 6hQaJ0GEajr1WHXPb from registry.
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:57.358Z [33mACTOR: [39mCreating container.
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:57.398Z [33mACTOR: [39mStarting container.
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:57.400Z [33mACTOR: [39mRunning under "LIMITED_PERMISSIONS".
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:57.693Z Running on architecture: x86_64
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:57.694Z Will run command: xvfb-run -a -s "-ac -screen 0 1920x1080x24+32 -nolisten tcp" /bin/bash -o pipefail -c bash -c "    java         --enable-native-access=ALL-UNNAMED         -cp classes-test:classes-main:lib/*         com.zhiliaoapp.musically.MetaSec         > /dev/null &     node dist/src/entrypoint.js "
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:58.709Z [32mINFO[39m  System info[90m {"apifyVersion":"3.7.0","apifyClientVersion":"2.23.0","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v24.19.0"}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:29:59.378Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:00.181Z [32mINFO[39m  Loaded profile info[90m {"url":"https://www.tiktok.com/@chandukw"}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:00.459Z [33mWARN[39m  Failed to parse response status[90m {"error":"✖ Invalid input: expected object, received undefined"}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:00.461Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Page loaded with a bad state (missing `user-detail`), retrying
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:00.463Z     at getUserDataFromScriptStr (file:///home/myuser/dist/src/routes/profile/profile-parsers.js:82:15)[90m {"id":"LMauHrNpB5RoidW","url":"https://www.tiktok.com/@gilangalkatiri","retryCount":1}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:01.328Z [32mINFO[39m  [PROFILE_VIDEO_CONTINUATION] Scraped 1 videos --- https://www.tiktok.com/@chandukw (videos tab)
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:04.522Z [32mINFO[39m  Loaded profile info[90m {"url":"https://www.tiktok.com/@gilangalkatiri"}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:05.758Z [32mINFO[39m  [PROFILE_VIDEO_CONTINUATION] Scraped 5 videos --- https://www.tiktok.com/@gilangalkatiri (videos tab)
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:06.151Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Failed to parse TikTok response: Unexpected end of JSON input --- https://www.tiktok.com/@gilangalkatiri
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:06.152Z     at makeWebApiCall (file:///home/myuser/dist/src/tools/api/web/make-web-api-call.js:114:23)[90m {"id":"0rom5l6Ve8RxMdn","url":"https://www.tiktok.com/@gilangalkatiri","retryCount":1}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:09.254Z [32mINFO[39m  [Status message]: Scraped 2/2 profiles
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:09.909Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:10.110Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":12,"requestsFailed":0,"retryHistogram":[10,2],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":1755,"requestsFinishedPerMinute":66,"requestsFailedPerMinute":0,"requestTotalDurationMillis":21056,"requestsTotal":12,"crawlerRuntimeMillis":10905}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:10.111Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 12 requests: 12 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:10.113Z [32mINFO[39m  [Status message]: Scraped 2/2 profiles
+[36mtiktok-scraper runId:670d5cgdrRtZBvYo3 -> [39m2026-08-11T14:30:10.199Z [32mINFO[39m  [Status message]: Scraped 2/2 profiles
+3 dari 5 valid menurut Apify.
+
+--- clarakarina (instagram) ---
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:14.288Z [33mACTOR: [39mPulling container image of build QBBXeFfdh0OoH2hsG from registry.
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:14.290Z [33mACTOR: [39mCreating container.
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:14.441Z [33mACTOR: [39mStarting container.
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:14.442Z [33mACTOR: [39mRunning under "LIMITED_PERMISSIONS".
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:16.590Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v24.19.0"}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:16.733Z [32mINFO[39m  [Status message]: Starting the scraper with 1 direct URL(s)
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:16.856Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:18.462Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:18.463Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":1}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:22.323Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:22.323Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":2}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:27.460Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:27.461Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":3}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:32.062Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:32.063Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":4}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:36.184Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:36.185Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"kDuvIR11Zwt5UKn","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=clarakarina","retryCount":5}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:42.426Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:43.381Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":1,"requestsFailed":0,"retryHistogram":[null,null,null,null,null,1],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":3235,"requestsFinishedPerMinute":2,"requestsFailedPerMinute":0,"requestTotalDurationMillis":3235,"requestsTotal":1,"crawlerRuntimeMillis":26594}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:43.381Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 1 requests: 1 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36minstagram-scraper runId:WTG144Iyg06F9cE8E -> [39m2026-08-11T14:30:43.382Z [32mINFO[39m  [Status message]: Scraper finished
+  [SKIP] clarakarina — follower 5 < 5000
+
+--- fellexandro (instagram) ---
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:47.858Z [33mACTOR: [39mPulling container image of build QBBXeFfdh0OoH2hsG from registry.
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:47.861Z [33mACTOR: [39mCreating container.
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:47.902Z [33mACTOR: [39mStarting container.
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:47.903Z [33mACTOR: [39mRunning under "LIMITED_PERMISSIONS".
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:48.630Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v24.19.0"}[39m
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:48.769Z [32mINFO[39m  [Status message]: Starting the scraper with 1 direct URL(s)
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:48.864Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:54.167Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:54.351Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":1,"requestsFailed":0,"retryHistogram":[1],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":5296,"requestsFinishedPerMinute":11,"requestsFailedPerMinute":0,"requestTotalDurationMillis":5296,"requestsTotal":1,"crawlerRuntimeMillis":5544}[39m
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:54.351Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 1 requests: 1 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36minstagram-scraper runId:LjDWlL4RNkaviuNbv -> [39m2026-08-11T14:30:54.352Z [32mINFO[39m  [Status message]: Scraper finished
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:57.668Z [33mACTOR: [39mPulling container image of build QBBXeFfdh0OoH2hsG from registry.
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:57.671Z [33mACTOR: [39mCreating container.
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:57.715Z [33mACTOR: [39mStarting container.
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:57.717Z [33mACTOR: [39mRunning under "LIMITED_PERMISSIONS".
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:58.348Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v24.19.0"}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:58.464Z [32mINFO[39m  Relative date value "30 days" converted to 2026-07-12T14:30:58.462Z
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:58.470Z [32mINFO[39m  [Status message]: Starting the scraper with 1 direct URL(s)
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:30:58.606Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:00.252Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:00.254Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"1ScYt7ZDCvzBZv4","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=fellexandro","retryCount":1}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:09.957Z [32mINFO[39m  No more posts within the wanted time range, finishing https://www.instagram.com/fellexandro/
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:17.001Z [33mWARN[39m  post-details: full post query failed, falling back to the post page[90m {"shortCode":"DbIewdzSuea","failure":"RATE_LIMITED"}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:17.004Z [32mINFO[39m  post-details: page fallback[90m {"shortCode":"DbIewdzSuea","reason":"PRIMARY_QUERY_FAILED","keepInMezmo":true}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:19.580Z [33mWARN[39m  post-details: media metrics rate limited, failing the request for a fresh proxy[90m {"shortCode":"DbIewdzSuea"}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:19.582Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. media metrics rate limited
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:19.583Z     at fetchFallbackMediaMetrics (file:///usr/src/app/dist/index.js:38:693161)[90m {"id":"hrMU3ydYLSXgPuY","url":"https://media-metrics-DbIewdzSuea","retryCount":1}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:27.056Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:27.199Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":13,"requestsFailed":0,"retryHistogram":[11,2],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":4746,"requestsFinishedPerMinute":27,"requestsFailedPerMinute":0,"requestTotalDurationMillis":61697,"requestsTotal":13,"crawlerRuntimeMillis":28694}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:27.200Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 13 requests: 13 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36minstagram-scraper runId:ze4Y1KYVdmdjBPCi8 -> [39m2026-08-11T14:31:27.202Z [32mINFO[39m  [Status message]: Scraper finished
+  [AI] gender: male
+  [AI] kategori: Education & Science
+  [INFO] 7/7 post punya data views (video/Reels)
+  [OK] creator id 430, tier Macro, engagement 1.44%
+  [OK] 7/7 post tersimpan
+  [+] 6 username baru ditemukan, masuk staging
+
+--- alexiswijaya (instagram) ---
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:04.718Z [33mACTOR: [39mPulling container image of build QBBXeFfdh0OoH2hsG from registry.
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:04.720Z [33mACTOR: [39mCreating container.
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:04.783Z [33mACTOR: [39mStarting container.
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:04.784Z [33mACTOR: [39mRunning under "LIMITED_PERMISSIONS".
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:09.145Z [32mINFO[39m  System info[90m {"apifyVersion":"3.6.0","apifyClientVersion":"2.22.2","crawleeVersion":"3.16.0","osType":"Linux","nodeVersion":"v24.19.0"}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:09.357Z [32mINFO[39m  [Status message]: Starting the scraper with 1 direct URL(s)
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:09.605Z [32mINFO[39m [33m CheerioCrawler:[39m Starting the crawler.
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:11.716Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:11.718Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":1}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:16.259Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:16.261Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":2}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:22.146Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:22.149Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":3}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:26.867Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:26.869Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":4}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:30.752Z [33mWARN[39m [33m CheerioCrawler:[39m Reclaiming failed request back to the list or queue. Request blocked, retrying it again with different session
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:30.754Z     at CheerioCrawler._requestFunctionErrorHandler (file:///usr/src/app/dist/index.js:1:28024)[90m {"id":"7WXSeZRXIPUC0l0","url":"https://i.instagram.com/api/v1/users/web_profile_info/?username=alexiswijaya","retryCount":5}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:37.091Z [32mINFO[39m [33m CheerioCrawler:[39m All requests from the queue have been processed, the crawler will shut down.
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:37.886Z [32mINFO[39m [33m CheerioCrawler:[39m Final request statistics:[90m {"requestsFinished":1,"requestsFailed":0,"retryHistogram":[null,null,null,null,null,1],"requestAvgFailedDurationMillis":null,"requestAvgFinishedDurationMillis":3333,"requestsFinishedPerMinute":2,"requestsFailedPerMinute":0,"requestTotalDurationMillis":3333,"requestsTotal":1,"crawlerRuntimeMillis":28483}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:37.888Z [32mINFO[39m [33m CheerioCrawler:[39m Finished! Total 1 requests: 1 succeeded, 0 failed.[90m {"terminal":true}[39m
+[36minstagram-scraper runId:cgqdpDviVlXq5wzAr -> [39m2026-08-11T14:32:37.889Z [32mINFO[39m  [Status message]: Scraper finished
+  [SKIP] alexiswijaya — follower 0 < 5000
+
+=== [Flow 2] RINGKASAN ===
+Berhasil: 1
+Dilewati: 2
+Error: 0

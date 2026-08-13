@@ -4,99 +4,10 @@ import { ApifyClient } from 'apify-client';
 // ROTASI MULTI-TOKEN APIFY
 // ============================================================================
 
-const APIFY_TOKENS = (process.env.APIFY_TOKENS ?? '')
-  .split(',')
-  .map(t => t.trim())
-  .filter(Boolean);
-
-if (APIFY_TOKENS.length === 0) {
-  throw new Error('APIFY_TOKENS tidak ditemukan di .env (pisahkan dengan koma kalau lebih dari 1)');
-}
-
-let currentTokenIndex = 0;
-
-function getClient(): ApifyClient {
-  return new ApifyClient({ token: APIFY_TOKENS[currentTokenIndex] });
-}
-
-// Dipanggil setelah setiap `client.actor(...).call(...)`.
-// .call() TIDAK otomatis throw kalau run-nya gagal (misal karena kredit/usage
-// bulanan habis) — dia cuma mengembalikan objek run apa adanya dengan
-// status FAILED. Jadi kita harus cek manual dan lempar error sendiri,
-// supaya callActorWithRotation() bisa mendeteksinya dan rotasi token.
-function assertRunSucceeded(run: { status: string; statusMessage?: string | null }) {
-  if (run.status !== 'SUCCEEDED') {
-    const err: any = new Error(
-      run.statusMessage || `Actor run gagal dengan status: ${run.status}`
-    );
-    err.apifyRunStatus = run.status;
-    throw err;
-  }
-}
-
-function isQuotaOrLimitError(err: any): boolean {
-  const statusCode = err?.statusCode ?? err?.status;
-  const type = err?.type ?? err?.error?.type ?? '';
-  const message = String(err?.message ?? '').toLowerCase();
-
-  if (statusCode === 429) return true;
-  if (statusCode === 402) return true;
-  if (type.includes('rate-limit')) return true;
-  if (type.includes('limit-exceeded')) return true;
-
-  // Pola pesan yang muncul kalau kredit/usage bulanan habis
-  // (run gagal dengan status FAILED, bukan error HTTP langsung).
-  if (
-    message.includes('usage hard limit') ||
-    message.includes('monthly usage') ||
-    message.includes('insufficient funds') ||
-    message.includes('insufficient credit') ||
-    message.includes('exceeded your') ||
-    message.includes('out of credit') ||
-    message.includes('rate limit') ||
-    message.includes('quota')
-  ) {
-    return true;
-  }
-
-  return false;
-}
-
-async function callActorWithRotation<T>(
-  runActor: (client: ApifyClient) => Promise<T>
-): Promise<T> {
-  const startIndex = currentTokenIndex;
-  let attempts = 0;
-  let lastError: any;
-
-  while (attempts < APIFY_TOKENS.length) {
-    const client = getClient();
-    try {
-      return await runActor(client);
-    } catch (err: any) {
-      lastError = err;
-
-      if (!isQuotaOrLimitError(err)) {
-        // Error selain limit (input salah, actor error internal, dll)
-        // — jangan rotasi, langsung lempar apa adanya.
-        throw err;
-      }
-
-      console.warn(
-        `  [APIFY] Token index ${currentTokenIndex} kena limit/quota (${err.message}). Rotasi ke token berikutnya...`
-      );
-      currentTokenIndex = (currentTokenIndex + 1) % APIFY_TOKENS.length;
-      attempts++;
-
-      // Kalau sudah muter balik ke token awal, berarti semua token sudah dicoba.
-      if (currentTokenIndex === startIndex) break;
-    }
-  }
-
-  throw new Error(
-    `Semua ${APIFY_TOKENS.length} token Apify kena limit/quota. Error terakhir: ${lastError?.message}`
-  );
-}
+import {
+  callActorWithRotation,
+  assertRunSucceeded,
+} from "./apify-token-rotation";
 
 // ============================================================================
 // TYPES
@@ -124,7 +35,6 @@ export interface RawProfile {
   posts: RawPost[];
   isValid: boolean;
 }
-
 
 // ============================================================================
 // SCRAPE PROFILES
@@ -187,15 +97,29 @@ export async function scrapeInstagramProfileDetails(usernames: string[]): Promis
 // Dipanggil belakangan, cuma untuk akun yang sudah lolos filter follower
 // dari scrapeInstagramProfileDetails — supaya akun yang di-skip nggak
 // ikut kena request post yang mahal.
-export async function scrapeInstagramPosts(username: string): Promise<RawPost[]> {
+//
+// sinceDate (opsional): kalau creator ini SUDAH pernah di-scrape sebelumnya,
+// kasih last_scraped_at di sini supaya Apify cuma narik post yang di-upload
+// SEJAK tanggal itu (bukan 30 hari penuh lagi) — hemat kuota, karena post
+// lama yang udah pernah ke-scrape nggak perlu ditarik ulang.
+// Kalau tidak diisi (creator baru, belum pernah di-scrape), default 30 hari.
+export async function scrapeInstagramPosts(
+  username: string,
+  sinceDate?: Date
+): Promise<RawPost[]> {
   const { valid } = sanitizeUsernames([username]);
   if (valid.length === 0) return [];
 
   return callActorWithRotation(async (client) => {
+    const onlyPostsNewerThan = sinceDate
+      ? sinceDate.toISOString().split('T')[0] // format YYYY-MM-DD
+      : '30 days'; // default: creator baru, belum pernah di-scrape
+
     const postsRun = await client.actor('apify/instagram-scraper').call({
       directUrls: [`https://www.instagram.com/${valid[0]}/`],
       resultsType: 'posts',
       resultsLimit: 30,
+      onlyPostsNewerThan,
     });
     assertRunSucceeded(postsRun);
     const { items: postItems } = await client.dataset(postsRun.defaultDatasetId).listItems();
@@ -234,7 +158,13 @@ export async function scrapeInstagramProfiles(usernames: string[]): Promise<RawP
   return results;
 }
 
-export async function scrapeTiktokProfiles(usernames: string[]): Promise<RawProfile[]> {
+// sinceDate (opsional): sama seperti scrapeInstagramPosts — TikTok actor
+// tidak punya filter tanggal bawaan, jadi tetap narik semua dulu (max
+// resultsPerPage), lalu difilter manual di sini berdasarkan createTimeISO.
+export async function scrapeTiktokProfiles(
+  usernames: string[],
+  sinceDate?: Date
+): Promise<RawProfile[]> {
   return callActorWithRotation(async (client) => {
     const run = await client.actor('clockworks/tiktok-scraper').call({
       profiles: usernames,
@@ -247,10 +177,19 @@ export async function scrapeTiktokProfiles(usernames: string[]): Promise<RawProf
 
     const { items } = await client.dataset(run.defaultDatasetId).listItems();
 
+    const cutoffMs = sinceDate
+      ? sinceDate.getTime()
+      : Date.now() - 30 * 24 * 60 * 60 * 1000; // default 30 hari
+
     const grouped = new Map<string, any[]>();
     for (const item of items as any[]) {
       const key = item.authorMeta?.name;
       if (!key) continue;
+
+      const postedAtMs = new Date(item.createTimeISO).getTime();
+      const isWithinRange = !isNaN(postedAtMs) && postedAtMs >= cutoffMs;
+      if (!isWithinRange) continue;
+
       grouped.set(key, [...(grouped.get(key) ?? []), item]);
     }
 
@@ -301,7 +240,6 @@ export async function validateUsernames(
     valid: foundUsernames.has(u.toLowerCase()),
   }));
 }
-
 
 // ============================================================================
 // SCRAPE SINGLE CONTENT URL

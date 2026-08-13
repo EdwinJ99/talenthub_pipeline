@@ -27,10 +27,11 @@ function isRateLimitOrQuotaError(err: any): boolean {
   return status === 429 || status === 503;
 }
 
+// Dipangkas jadi 1 model saja — flash-lite paling murah kuotanya.
+// Kalau nanti kamu sudah punya key dari akun Google yang beda-beda beneran
+// (bukan 1 project yang sama), boleh tambah lagi model lain di sini.
 const MODEL_CANDIDATES = [
   "gemini-flash-lite-latest",
-  "gemini-2.5-flash",
-  "gemini-flash-latest",
 ];
 
 interface GenerateOptions {
@@ -57,9 +58,9 @@ async function callModel(
 }
 
 // Coba semua model di MODEL_CANDIDATES pakai API KEY YANG SEDANG AKTIF.
-// Ini logic yang sama seperti sebelumnya (retry 3x per model, pindah model
-// kalau rate-limited) — cuma sekarang dibungkus jadi fungsi terpisah supaya
-// bisa dipanggil ulang dari generateWithRetry() tiap kali pindah key.
+// Dipangkas jadi CUMA 1x percobaan per model (tanpa retry-tunggu), supaya
+// begitu kena 429, langsung pindah/gagal cepat — tidak buang waktu nunggu
+// 10-15 detik per percobaan kalau memang kuotanya lagi habis semua.
 async function tryAllModelsWithCurrentKey(
   prompt: string,
   options?: GenerateOptions
@@ -67,29 +68,15 @@ async function tryAllModelsWithCurrentKey(
   let lastError: any;
 
   for (const modelName of MODEL_CANDIDATES) {
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        if (attempt > 1) {
-          const waitMs = attempt * 5000;
-          console.log(
-            `  Tunggu ${waitMs / 1000}s sebelum coba lagi (${modelName}, key index ${currentKeyIndex})...`
-          );
-          await new Promise((r) => setTimeout(r, waitMs));
-        }
-        const genAI = getGenAI();
-        return await callModel(genAI, modelName, prompt, options);
-      } catch (err: any) {
-        lastError = err;
-        const isRateLimited = isRateLimitOrQuotaError(err);
-        const isNotFound = err?.status === 404;
-        console.log(
-          `  Gagal (status ${err?.status ?? "unknown"}) pakai ${modelName} (key index ${currentKeyIndex})`
-        );
-        if (isNotFound) break; // model invalid, jangan buang attempt lagi, lanjut model berikutnya
-        if (!isRateLimited) break;
-      }
+    try {
+      const genAI = getGenAI();
+      return await callModel(genAI, modelName, prompt, options);
+    } catch (err: any) {
+      lastError = err;
+      console.log(
+        `  Gagal (status ${err?.status ?? "unknown"}) pakai ${modelName} (key index ${currentKeyIndex})`
+      );
     }
-    console.log(`  Pindah ke model berikutnya...`);
   }
 
   throw lastError;
@@ -119,7 +106,7 @@ async function generateWithRetry(
       }
 
       console.warn(
-        `  [GEMINI] Key index ${currentKeyIndex} kena limit di semua model. Rotasi ke key berikutnya...`
+        `  [GEMINI] Key index ${currentKeyIndex} kena limit. Rotasi ke key berikutnya...`
       );
       currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
       attempts++;

@@ -60,12 +60,38 @@ export async function processCreator(
 ) {
   console.log(`\n--- ${entry.username} (${entry.platform}) ---`);
 
+  // 0. Tentukan rentang tanggal post yang mau diambil:
+  //    - Creator BARU (belum pernah di-scrape): sinceDate = undefined
+  //      → scraper pakai default 30 hari (lihat lib/apify.ts)
+  //    - Creator LAMA (sudah pernah di-scrape sebelumnya): sinceDate =
+  //      last_scraped_at → scraper cuma narik post yang di-upload SEJAK
+  //      tanggal itu (biasanya ±7 hari, tergantung jadwal refresh kamu),
+  //      bukan 30 hari penuh lagi. Ini yang bikin scrape berikutnya jadi
+  //      jauh lebih ringan/murah dibanding scrape pertama kali.
+  //    Kalau preScrapedProfile sudah dikasih (dipanggil dari Flow 2/3 yang
+  //    sudah scrape duluan), langkah ini di-skip karena tidak relevan lagi.
+  let sinceDate: Date | undefined;
+  if (!preScrapedProfile) {
+    const existing = await prisma.mst_creators.findUnique({
+      where: {
+        username_social_media: {
+          username: entry.username,
+          social_media: entry.platform,
+        },
+      },
+      select: { last_scraped_at: true },
+    });
+    if (existing?.last_scraped_at) {
+      sinceDate = existing.last_scraped_at;
+    }
+  }
+
   // 1. Scrape PROFIL DULU AJA (murah — 1 request untuk IG, TikTok tetap gabung)
   const profile =
     preScrapedProfile ??
     (entry.platform === "instagram"
       ? (await scrapeInstagramProfileDetails([entry.username]))[0]
-      : (await scrapeTiktokProfiles([entry.username]))[0]);
+      : (await scrapeTiktokProfiles([entry.username], sinceDate))[0]);
 
   if (!profile || !profile.isValid) {
     console.log("  [SKIP] username tidak valid/tidak ditemukan");
@@ -81,11 +107,12 @@ export async function processCreator(
     return { status: "skipped", username: entry.username };
   }
 
-  // 1c. Baru sekarang narik postingan — HANYA untuk akun yang sudah lolos
-  //     validitas + minimal follower. TikTok sudah otomatis punya posts
-  //     dari step 1 (nggak perlu request tambahan).
+  // 1c. Baru sekarang narik postingan Instagram — HANYA untuk akun yang
+  //     sudah lolos validitas + minimal follower. Pakai sinceDate yang
+  //     sama supaya konsisten dengan filter di atas. TikTok sudah otomatis
+  //     punya posts dari step 1 (nggak perlu request tambahan).
   if (entry.platform === "instagram" && profile.posts.length === 0) {
-    profile.posts = await scrapeInstagramPosts(profile.username);
+    profile.posts = await scrapeInstagramPosts(profile.username, sinceDate);
   }
 
   // 2. Cek lokasi Indonesia (Gemini)
@@ -102,7 +129,7 @@ export async function processCreator(
 
   let cityId: number | undefined;
   const topLocation = mostCommonLocation(profile.posts);
-  const cityNameToSearch = topLocation ?? locationCheck.cityGuess;
+  const cityNameToSearch = topLocation ?? locationCheck.cityGuess; // prioritas: lokasi post, fallback: tebakan Gemini dari bio
 
   if (cityNameToSearch) {
     const city = await prisma.mst_cities.findFirst({
@@ -111,14 +138,23 @@ export async function processCreator(
     cityId = city?.id;
   }
 
-  // 3. Klasifikasi kategori akun (Gemini)
+  // 3. Klasifikasi kategori akun (Gemini) — SKIP kalau kategori sudah
+  //    diwariskan dari luar (misal via script import yang sudah tahu
+  //    kategori dari creator sumbernya).
   const existingCategories = await prisma.mst_categories.findMany();
-  const chosenCategoryName = await classifyAccountCategory(
-    profile.username,
-    profile.bio ?? "",
-    profile.posts,
-    existingCategories.map((c) => c.name)
-  );
+
+  const chosenCategoryName =
+    entry.category ??
+    (await classifyAccountCategory(
+      profile.username,
+      profile.bio ?? "",
+      profile.posts,
+      existingCategories.map((c) => c.name)
+    ));
+
+  if (entry.category) {
+    console.log(`  [INFO] kategori diwariskan: ${entry.category} (skip Gemini)`);
+  }
 
   const gender = await detectGender(
     profile.username,
@@ -151,6 +187,7 @@ export async function processCreator(
   );
   const avgEngagement = average(engagementRates);
 
+  // Post carousel/foto tunggal memang tidak punya views di Instagram, jadi tidak diikutkan.
   const videoPosts = profile.posts.filter(
     (p: RawPost) => p.views !== undefined && p.views > 0
   );

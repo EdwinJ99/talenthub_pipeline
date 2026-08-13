@@ -175,32 +175,34 @@ model mst_general_filters {
 }
 
 model trs_project {
-  prj_id          Int           @id @default(autoincrement())
-  prj_brand       Int
-  prj_nama        String        @db.VarChar(100)
-  prj_quotationno String?       @db.VarChar(100)
-  prj_invoiceno   String?       @db.VarChar(100)
-  prj_dstartdate  DateTime      @db.Date
-  prj_denddate    DateTime      @db.Date
-  prj_qstartdate  DateTime?     @db.Date
-  prj_qenddate    DateTime?     @db.Date
-  prj_rstartdate  DateTime?     @db.Date
-  prj_renddate    DateTime?     @db.Date
-  prj_istartdate  DateTime?     @db.Date
-  prj_ienddate    DateTime?     @db.Date
-  prj_status      Int           @default(1)
-  creaby          String        @db.VarChar(20)
-  creadate        DateTime      @default(now()) @db.Timestamp(6)
-  modiby          String?       @db.VarChar(20)
-  modidate        DateTime?     @default(now()) @db.Timestamp(6)
-  prj_kode        String        @unique(map: "uq_project_kode") @db.VarChar(20)
-  prj_paymentid   Int?
-  prj_sheet_sync  DateTime?     @db.Timestamp(6)
-  prj_sheetid     String?       @db.VarChar(150)
-  prj_sheeturl    String?
-  dtl_project     dtl_project[]
-  mst_brand       mst_brand     @relation(fields: [prj_brand], references: [brd_id], map: "fk_trs_project_brand")
-  mst_payment     mst_payment?  @relation(fields: [prj_paymentid], references: [pyt_id], onUpdate: NoAction, map: "fk_trs_project_payment")
+  prj_id               Int           @id @default(autoincrement())
+  prj_brand            Int
+  prj_nama             String        @db.VarChar(100)
+  prj_quotationno      String?       @db.VarChar(100)
+  prj_invoiceno        String?       @db.VarChar(100)
+  prj_dstartdate       DateTime      @db.Date
+  prj_denddate         DateTime      @db.Date
+  prj_qstartdate       DateTime?     @db.Date
+  prj_qenddate         DateTime?     @db.Date
+  prj_rstartdate       DateTime?     @db.Date
+  prj_renddate         DateTime?     @db.Date
+  prj_istartdate       DateTime?     @db.Date
+  prj_ienddate         DateTime?     @db.Date
+  prj_status           Int           @default(1)
+  creaby               String        @db.VarChar(20)
+  creadate             DateTime      @default(now()) @db.Timestamp(6)
+  modiby               String?       @db.VarChar(20)
+  modidate             DateTime?     @default(now()) @db.Timestamp(6)
+  prj_kode             String        @unique(map: "uq_project_kode") @db.VarChar(20)
+  prj_paymentid        Int?
+  prj_sheet_sync       DateTime?     @db.Timestamp(6)
+  prj_sheetid          String?       @db.VarChar(150)
+  prj_sheeturl         String?
+  prj_invoice_tax_rate Decimal?      @db.Decimal(5, 2)
+  prj_tax_rate         Decimal       @default(11.00) @db.Decimal(5, 2)
+  dtl_project          dtl_project[]
+  mst_brand            mst_brand     @relation(fields: [prj_brand], references: [brd_id], map: "fk_trs_project_brand")
+  mst_payment          mst_payment?  @relation(fields: [prj_paymentid], references: [pyt_id], onUpdate: NoAction, map: "fk_trs_project_payment")
 }
 
 model mst_creators {
@@ -266,6 +268,31 @@ model stg_discovered_usernames {
   validated_at      DateTime?
 
   @@unique([username, social_media], map: "uq_discovered_username_platform")
+}
+
+model stg_scrape_jobs {
+  id          Int       @id @default(autoincrement())
+  username    String
+  platform    String
+  category    String?
+  status      String    @default("pending")
+  attempts    Int       @default(0)
+  last_error  String?
+  started_at  DateTime?
+  finished_at DateTime?
+  created_at  DateTime  @default(now())
+}
+
+model mst_apify_tokens {
+  id                Int       @id @default(autoincrement())
+  token             String    @unique
+  label             String?
+  is_active         Boolean   @default(true)
+  quota_exceeded_at DateTime?
+  last_used_at      DateTime?
+  created_at        DateTime  @default(now())
+
+  @@index([is_active, quota_exceeded_at])
 }
 
 enum Role {
