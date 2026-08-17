@@ -93,16 +93,23 @@ export async function scrapeInstagramProfileDetails(usernames: string[]): Promis
   });
 }
 
-// Narik postingan (Reels-only, max 30) untuk SATU username.
-// Dipanggil belakangan, cuma untuk akun yang sudah lolos filter follower
-// dari scrapeInstagramProfileDetails — supaya akun yang di-skip nggak
-// ikut kena request post yang mahal.
+// Narik postingan (SEMUA tipe: foto, carousel, reels — max 30) untuk SATU
+// username. Dipanggil belakangan, cuma untuk akun yang sudah lolos filter
+// follower dari scrapeInstagramProfileDetails — supaya akun yang di-skip
+// nggak ikut kena request post yang mahal.
 //
-// sinceDate (opsional): kalau creator ini SUDAH pernah di-scrape sebelumnya,
-// kasih last_scraped_at di sini supaya Apify cuma narik post yang di-upload
-// SEJAK tanggal itu (bukan 30 hari penuh lagi) — hemat kuota, karena post
-// lama yang udah pernah ke-scrape nggak perlu ditarik ulang.
-// Kalau tidak diisi (creator baru, belum pernah di-scrape), default 30 hari.
+// sinceDate (opsional):
+//   - TIDAK diisi (creator BARU, belum pernah di-scrape): sengaja TIDAK
+//     dikasih filter tanggal (onlyPostsNewerThan) sama sekali. Kita cuma
+//     andalkan resultsLimit: 30 supaya Apify ambil sampai 30 post TERBARU
+//     apa adanya, tanpa dibatasi rentang tanggal. Kalau total post akun
+//     kurang dari 30, otomatis dapet seadanya. Ini yang mastiin ER pertama
+//     kali dihitung dari sample yang cukup (bukan cuma 1-2 post).
+//   - DIISI (creator LAMA, sudah pernah di-scrape): dipakai sebagai
+//     onlyPostsNewerThan — cuma narik post yang di-upload SEJAK tanggal
+//     scrape terakhir sampai sekarang. Hemat kuota, karena post lama udah
+//     tersimpan di DB dari scrape sebelumnya (lihat pipeline.ts — ER
+//     dihitung dari 30 post terakhir di DB, gabungan lama + baru).
 export async function scrapeInstagramPosts(
   username: string,
   sinceDate?: Date
@@ -111,21 +118,24 @@ export async function scrapeInstagramPosts(
   if (valid.length === 0) return [];
 
   return callActorWithRotation(async (client) => {
-    const onlyPostsNewerThan = sinceDate
-      ? sinceDate.toISOString().split('T')[0] // format YYYY-MM-DD
-      : '30 days'; // default: creator baru, belum pernah di-scrape
-
-    const postsRun = await client.actor('apify/instagram-scraper').call({
+    const runInput: Record<string, any> = {
       directUrls: [`https://www.instagram.com/${valid[0]}/`],
       resultsType: 'posts',
       resultsLimit: 30,
-      onlyPostsNewerThan,
-    });
+    };
+
+    if (sinceDate) {
+      runInput.onlyPostsNewerThan = sinceDate.toISOString().split('T')[0]; // format YYYY-MM-DD
+    }
+
+    const postsRun = await client.actor('apify/instagram-scraper').call(runInput);
     assertRunSucceeded(postsRun);
     const { items: postItems } = await client.dataset(postsRun.defaultDatasetId).listItems();
 
+    // Semua tipe post diikutkan (foto, carousel, reels) — bukan cuma
+    // Reels/video, supaya jumlah sample post konsisten & cukup buat ER.
+    // Post non-video otomatis tidak punya videoViewCount -> views undefined.
     return (postItems as any[])
-      .filter(p => p.productType === 'clips') // Reels-only
       .slice(0, 30)
       .map((p: any) => ({
         caption: p.caption ?? '',
@@ -158,9 +168,12 @@ export async function scrapeInstagramProfiles(usernames: string[]): Promise<RawP
   return results;
 }
 
-// sinceDate (opsional): sama seperti scrapeInstagramPosts — TikTok actor
-// tidak punya filter tanggal bawaan, jadi tetap narik semua dulu (max
-// resultsPerPage), lalu difilter manual di sini berdasarkan createTimeISO.
+// sinceDate (opsional): sama seperti scrapeInstagramPosts.
+//   - TIDAK diisi (creator baru): tidak difilter tanggal sama sekali, ambil
+//     sampai 30 post terbaru apa adanya (resultsPerPage: 30 dari actor).
+//   - DIISI (creator lama): difilter manual berdasarkan createTimeISO, cuma
+//     ambil post sejak sinceDate. TikTok actor tidak punya filter tanggal
+//     bawaan seperti Instagram, jadi filternya dilakukan di sini.
 export async function scrapeTiktokProfiles(
   usernames: string[],
   sinceDate?: Date
@@ -177,18 +190,18 @@ export async function scrapeTiktokProfiles(
 
     const { items } = await client.dataset(run.defaultDatasetId).listItems();
 
-    const cutoffMs = sinceDate
-      ? sinceDate.getTime()
-      : Date.now() - 30 * 24 * 60 * 60 * 1000; // default 30 hari
+    const cutoffMs = sinceDate ? sinceDate.getTime() : null;
 
     const grouped = new Map<string, any[]>();
     for (const item of items as any[]) {
       const key = item.authorMeta?.name;
       if (!key) continue;
 
-      const postedAtMs = new Date(item.createTimeISO).getTime();
-      const isWithinRange = !isNaN(postedAtMs) && postedAtMs >= cutoffMs;
-      if (!isWithinRange) continue;
+      if (cutoffMs !== null) {
+        const postedAtMs = new Date(item.createTimeISO).getTime();
+        const isWithinRange = !isNaN(postedAtMs) && postedAtMs >= cutoffMs;
+        if (!isWithinRange) continue;
+      }
 
       grouped.set(key, [...(grouped.get(key) ?? []), item]);
     }

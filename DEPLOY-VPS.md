@@ -1,80 +1,106 @@
-SETUP CRON UNTUK 3 SCRIPT TERJADWAL - TALENTHUB PIPELINE
-===========================================================
+# Peran VPS di setup ini
 
-Prasyarat: container "web" sudah ke-build dan .env sudah terpasang
-di VPS (sudah jalankan "docker compose up -d --build" duluan).
+Website (yang diakses lewat browser) sudah di-deploy di Vercel:
+https://talenthub-agum.vercel.app/
 
-Log disimpan di folder "logs/" DI DALAM PROJECT (bukan di
-/var/log), jadi gampang diakses tanpa perlu akses root/sudo.
+VPS di sini **TIDAK** menjalankan web server — VPS cuma dipakai buat
+menjalankan 3 script background job (`run-pipeline.ts`,
+`process-staging.ts`, `discover-trending.ts`) sesuai jadwal. Ketiga
+script itu langsung membaca/menulis ke database Neon yang sama dengan
+yang dipakai website di Vercel — jadi begitu script selesai jalan,
+datanya otomatis kelihatan di website tanpa perlu langkah tambahan.
 
+# 1. Siapkan `.env` di VPS
 
-LANGKAH 1 - Bikin folder logs di dalam project
--------------------------------------------
-cd /path/to/talenthub-pipeline
+Buat file `.env` **langsung di VPS** (jangan commit ke git), isinya sama
+seperti `.env` lokal kamu — `DATABASE_URL`, `GEMINI_API_KEYS`, dan
+variable lain yang dibutuhkan script-script ini.
+
+Token Apify **tidak** perlu ada di `.env` — semua token sudah disimpan
+di tabel `mst_apify_tokens` di database, otomatis kebawa selama
+`DATABASE_URL` mengarah ke database yang sama.
+
+# 2. Clone project & build image
+
+```bash
+git clone <repo-kamu> talenthub-pipeline
+cd talenthub-pipeline
+
+# taruh .env di sini (scp dari lokal, atau bikin manual)
+
+# build image (BUKAN "up" — tidak ada service yang perlu nyala terus)
+docker compose build
+```
+
+# 3. Sinkronisasi database (sekali di awal, dan tiap ada perubahan schema)
+
+```bash
+docker compose run --rm web npx prisma migrate deploy
+```
+
+(`migrate deploy` — versi aman buat production, cuma nerapin migration
+yang sudah dibuat lewat `migrate dev` di lokal, nggak akan nanya-nanya
+interaktif atau bikin migration baru sendiri)
+
+**PENTING — JANGAN PERNAH jalankan `prisma migrate reset` di VPS, apapun
+errornya.** Kalau muncul pesan "drift detected" atau semacamnya, STOP dan
+cek dulu ke pemilik project, jangan langsung reset.
+
+# 4. Pasang jadwal cron
+
+Bikin folder log di dalam project:
+```bash
 mkdir -p logs
+```
 
-Tambahkan baris ini ke file .gitignore (biar file log nggak
-ikut ke-push ke GitHub):
-logs/
-
-
-LANGKAH 2 - Buka crontab VPS
--------------------------------------------
+Buka crontab VPS:
+```bash
 crontab -e
+```
 
+Tambahkan 3 baris ini (ganti `/path/to/talenthub-pipeline` dengan lokasi
+project yang sebenarnya di VPS):
 
-LANGKAH 3 - Tempel 3 baris ini
--------------------------------------------
-PENTING: ganti "/path/to/talenthub-pipeline" dengan lokasi project
-yang sebenarnya di VPS (contoh: /home/user/talenthub-pipeline)
-sebelum ditempel.
-
-# run-pipeline.ts - tiap Senin jam 02:00 AM
+```cron
+# run-pipeline.ts - tiap Senin jam 02:00
 0 2 * * 1 cd /path/to/talenthub-pipeline && docker compose run --rm web npx tsx scripts/run-pipeline.ts >> logs/run-pipeline.log 2>&1
 
-# process-staging.ts - tiap Kamis jam 02:00 AM
+# process-staging.ts - tiap Kamis jam 02:00
 0 2 * * 4 cd /path/to/talenthub-pipeline && docker compose run --rm web npx tsx scripts/process-staging.ts >> logs/process-staging.log 2>&1
 
-# discover-trending.ts - tiap 2 hari sekali jam 02:00 AM
-0 8 * * * cd /path/to/talenthub-pipeline && docker compose run --rm web npx tsx scripts/discover-trending.ts >> logs/discover-trending.log 2>&1
+# discover-trending.ts - tiap 2 hari sekali jam 02:00
+0 2 */2 * * cd /path/to/talenthub-pipeline && docker compose run --rm web npx tsx scripts/discover-trending.ts >> logs/discover-trending.log 2>&1
+```
 
-Cara simpan & keluar:
-- nano   -> Ctrl+X, lalu Y, lalu Enter
-- vim    -> tekan Esc, ketik :wq, lalu Enter
-
-
-LANGKAH 4 - Pastikan kesimpen dengan benar
--------------------------------------------
+Cek kesimpen dengan benar:
+```bash
 crontab -l
+```
 
-Harus muncul 3 baris yang tadi ditempel.
+# 5. Test manual dulu (sebelum percaya jadwal cron)
 
-
-LANGKAH 5 - Test manual dulu (jangan langsung percaya cron)
--------------------------------------------
+```bash
 cd /path/to/talenthub-pipeline
 docker compose run --rm web npx tsx scripts/discover-trending.ts >> logs/discover-trending.log 2>&1
-
-Cek isinya:
 cat logs/discover-trending.log
+```
 
-Kalau ini jalan sukses tanpa error dan filenya keisi, berarti
-cron-nya aman jalan sesuai jadwal nanti.
+Kalau ini jalan sukses dan filenya keisi, cron-nya aman dipasang.
 
+# 6. Cek log kapan pun
 
-LANGKAH 6 - Cek log kapan pun (setelah cron jalan)
--------------------------------------------
+```bash
 tail -f logs/run-pipeline.log
 tail -f logs/process-staging.log
 tail -f logs/discover-trending.log
+```
 
+# Update ke versi baru (setelah git pull perubahan kode)
 
-RINGKASAN JADWAL
--------------------------------------------
-run-pipeline.ts        -> Senin,  02:00
-process-staging.ts     -> Kamis,  02:00
-discover-trending.ts   -> Setiap hari, 08:00
+```bash
+git pull
+docker compose build
+```
 
-Format hari cron: 1 = Senin, 4 = Kamis, * = setiap hari.
-Jam mengikuti timezone default VPS - cek dulu dengan perintah
-"date", sesuaikan angka jamnya kalau VPS bukan WIB.
+Cron berikutnya otomatis pakai image yang baru — nggak perlu restart apa
+pun, karena memang tidak ada service yang jalan terus-menerus.

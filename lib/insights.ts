@@ -74,6 +74,14 @@ export function filterPostsByRange<T extends RawPostLike>(posts: T[], days: numb
  * Computes averages, engagement rate, top hashtags, and top mentions from
  * a set of posts.
  *
+ * ER formula: ((avgLikes + avgComments) / followers) * 100 — the standard
+ * "ER by Followers" formula used industry-wide (matches HypeAuditor and
+ * similar tools). Views/saves/shares are intentionally excluded:
+ * - Views inflates the number wildly (can be millions per post on large
+ *   accounts) and is not part of the standard ER formula.
+ * - Saves/shares are only available via authenticated Business API access
+ *   (Instagram Insights / TikTok Analytics), not from public scraping.
+ *
  * NOTE: this deliberately does NOT compute "reach" or "watch time" — those
  * are private analytics only available to the account owner via an
  * authenticated Business API (Instagram Insights / TikTok Analytics).

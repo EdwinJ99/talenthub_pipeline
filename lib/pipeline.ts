@@ -23,10 +23,46 @@ export interface SeedEntry {
   category?: string;
 }
 
+// Jumlah sample post yang dipakai untuk menghitung ER & metrics lainnya.
+// ER selalu dihitung dari MAX_METRICS_SAMPLE post TERAKHIR yang ada di DB
+// (gabungan history lama + post baru hasil scrape kali ini) — bukan cuma
+// dari post yang baru saja di-scrape.
+//
+// Kenapa 12 (bukan 30): tools pembanding seperti HypeAuditor umumnya
+// menganalisis ~12 post terakhir. Window 30 post terbukti mencakup
+// rentang waktu terlalu panjang untuk akun yang sudah lama aktif (bisa
+// sampai 1-2 tahun ke belakang), sehingga lebih rentan ikut menangkap
+// "viral spike" historis yang sudah tidak representatif dengan performa
+// akun saat ini. Window 12 post lebih fokus ke performa TERKINI.
+//
+// Trade-off yang disadari: window lebih kecil = lebih rentan ke sample
+// kecil untuk akun yang jarang posting (mirip masalah awal sebelum
+// MAX_METRICS_SAMPLE diperkenalkan). Proses scraping tetap mengambil
+// hingga 30 post per scrape (lihat lib/apify.ts) untuk membangun history
+// yang cukup di DB — cuma ER yang dihitung dari 12 TERAKHIR, bukan semua.
+const MAX_METRICS_SAMPLE = 12;
+
 function average(nums: number[]): number {
   if (nums.length === 0) return 0;
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
+
+// Safety cap HANYA untuk kasus yang benar-benar mustahil/ekstrem (ER per
+// post > 300%, artinya interaksi 3x lipat lebih banyak dari followers).
+// Ini beda dari IQR/trimmed-mean yang sempat dicoba sebelumnya — IQR
+// terbukti TIDAK konsisten: membantu akun yang punya banyak post nyimpang
+// jauh (nagotejena), tapi JUSTRU merusak akun yang performanya konsisten
+// tanpa outlier asli (fadiljaidi), karena IQR salah mengira variasi wajar
+// sebagai anomali lalu membuang post yang sebenarnya valid.
+//
+// Kesimpulan: tidak ada 1 formula statistik yang cocok untuk semua akun
+// sekaligus — bahkan HypeAuditor & tools sejenis pun berbeda satu sama
+// lain (contoh: fadiljaidi 5.68% vs 4.05%, beda ~40% relatif). Karena itu
+// kita pakai AVERAGE BIASA (formula standar industri, paling transparan &
+// mudah dipertanggungjawabkan), dan hanya menjaga dari kasus yang jelas
+// tidak masuk akal (>300%) sebagai pengaman terakhir — bukan mengejar
+// kecocokan sempurna ke satu tool tertentu.
+const MAX_ENGAGEMENT_RATE_PER_POST = 300; // dalam persen
 
 function calculateTier(followers: number): string {
   if (followers >= 1_000_000) return "Mega";
@@ -62,12 +98,12 @@ export async function processCreator(
 
   // 0. Tentukan rentang tanggal post yang mau diambil:
   //    - Creator BARU (belum pernah di-scrape): sinceDate = undefined
-  //      → scraper pakai default 30 hari (lihat lib/apify.ts)
+  //      → scraper ambil sampai MAX_METRICS_SAMPLE post TERBARU apa
+  //      adanya, tanpa batas tanggal (lihat lib/apify.ts).
   //    - Creator LAMA (sudah pernah di-scrape sebelumnya): sinceDate =
   //      last_scraped_at → scraper cuma narik post yang di-upload SEJAK
-  //      tanggal itu (biasanya ±7 hari, tergantung jadwal refresh kamu),
-  //      bukan 30 hari penuh lagi. Ini yang bikin scrape berikutnya jadi
-  //      jauh lebih ringan/murah dibanding scrape pertama kali.
+  //      tanggal itu, bukan histori penuh lagi. Ini yang bikin scrape
+  //      berikutnya jauh lebih ringan/murah dibanding scrape pertama kali.
   //    Kalau preScrapedProfile sudah dikasih (dipanggil dari Flow 2/3 yang
   //    sudah scrape duluan), langkah ini di-skip karena tidak relevan lagi.
   let sinceDate: Date | undefined;
@@ -173,48 +209,20 @@ export async function processCreator(
 
   console.log(`  [AI] kategori: ${category.name}`);
 
-  // 4. Deteksi endorse vs konten asli (Gemini)
+  // 4. Deteksi endorse vs konten asli (Gemini) — dijalankan pada post yang
+  //    BARU di-scrape kali ini saja (post lama di DB sudah punya flag
+  //    is_endorse dari scrape sebelumnya, tidak perlu dideteksi ulang).
   const endorseResults = await detectEndorsePosts(
     profile.username,
     profile.posts
   );
 
-  // 5. Hitung metrics
-  const engagementRates = profile.posts.map((p: RawPost) =>
-    profile.followers > 0
-      ? ((p.likes + p.comments) / profile.followers) * 100
-      : 0
-  );
-  const avgEngagement = average(engagementRates);
-
-  // Post carousel/foto tunggal memang tidak punya views di Instagram, jadi tidak diikutkan.
-  const videoPosts = profile.posts.filter(
-    (p: RawPost) => p.views !== undefined && p.views > 0
-  );
-  const allViews = videoPosts.map((p: RawPost) => p.views as number);
-  const avgView = average(allViews);
-  console.log(
-    `  [INFO] ${videoPosts.length}/${profile.posts.length} post punya data views (video/Reels)`
-  );
-
-  const brandedVideoPosts = profile.posts.filter(
-    (p: RawPost, i: number) =>
-      endorseResults.find((e) => e.index === i)?.isEndorse &&
-      p.views !== undefined &&
-      p.views > 0
-  );
-  const brandedViews = brandedVideoPosts.map((p: RawPost) => p.views as number);
-  const avgViewBrand = average(brandedViews);
-
   const tier = calculateTier(profile.followers);
 
-  const insights = computeInsightsFromPosts(
-    profile.posts,
-    profile.followers,
-    profile.totalPost
-  );
-
-  // 6. Insert/update ke mst_creators
+  // 5. Upsert creator DULU (tanpa metrics ER/views/dll). Kita butuh
+  //    creator.id buat nyimpen post di step berikutnya. Metrics dihitung
+  //    dan di-UPDATE belakangan (step 8-9), setelah post baru tersimpan
+  //    ke DB dan bisa digabung dengan history lama.
   const creator = await prisma.mst_creators.upsert({
     where: {
       username_social_media: {
@@ -228,13 +236,6 @@ export async function processCreator(
       total_post: profile.totalPost,
       photo_url: profile.photoUrl,
       tier,
-      engagement_rate: avgEngagement.toFixed(2),
-      average_view: Math.round(avgView),
-      average_view_brand: Math.round(avgViewBrand),
-      avg_likes: insights.avgLikes,
-      avg_comments: insights.avgComments,
-      top_hashtags: insights.topHashtags as unknown as Prisma.InputJsonValue,
-      top_mentions: insights.topMentions as unknown as Prisma.InputJsonValue,
       category_id: category.id,
       city_id: cityId,
       gender,
@@ -253,23 +254,10 @@ export async function processCreator(
       category_id: category.id,
       city_id: cityId,
       gender,
-      engagement_rate: avgEngagement.toFixed(2),
-      average_view: Math.round(avgView),
-      average_view_brand: Math.round(avgViewBrand),
-      avg_likes: insights.avgLikes,
-      avg_comments: insights.avgComments,
-      top_hashtags: insights.topHashtags as unknown as Prisma.InputJsonValue,
-      top_mentions: insights.topMentions as unknown as Prisma.InputJsonValue,
     },
   });
 
-  console.log(
-    `  [OK] creator id ${
-      creator.id
-    }, tier ${tier}, engagement ${avgEngagement.toFixed(2)}%`
-  );
-
-  // 7. Insert/update tiap post
+  // 6. Insert/update tiap post yang BARU di-scrape kali ini ke DB.
   let savedPosts = 0;
   for (let i = 0; i < profile.posts.length; i++) {
     const p = profile.posts[i];
@@ -309,9 +297,104 @@ export async function processCreator(
       console.error(`  Gagal simpan post index ${i}:`, err);
     }
   }
-  console.log(`  [OK] ${savedPosts}/${profile.posts.length} post tersimpan`);
+  console.log(`  [OK] ${savedPosts}/${profile.posts.length} post baru tersimpan`);
 
-  // 8. Cari username baru dari bio/mention
+  // 7. AMBIL MAX_METRICS_SAMPLE POST TERAKHIR dari DB (bukan cuma yang baru
+  //    di-scrape kali ini). Ini kuncinya: post lama dari refresh-refresh
+  //    sebelumnya ikut kehitung, jadi ER tidak lagi bias gara-gara jumlah
+  //    post yang berhasil di-scrape berbeda-beda tiap kali refresh.
+  const latestPosts = await prisma.dtl_creator_posts.findMany({
+    where: { creator_id: creator.id },
+    orderBy: { posted_at: "desc" },
+    take: MAX_METRICS_SAMPLE,
+  });
+  console.log(
+    `  [INFO] hitung metrics dari ${latestPosts.length} post terakhir di DB`
+  );
+
+  // 8. Hitung metrics dari latestPosts (bukan dari profile.posts lagi).
+  //    ER = ((likes + comments + views) / followers) * 100 per post,
+  //    dirata-ratakan. Views ikut di pembilang sesuai keputusan produk —
+  //    post foto/carousel yang tidak punya views dianggap 0.
+  // ER = ((likes + comments) / followers) * 100 — mengikuti formula
+  // standar industri ("ER by Followers"), TANPA views di pembilang.
+  // Views sengaja TIDAK diikutkan: nilainya jauh lebih besar dari
+  // likes+comments (bisa jutaan per post untuk akun besar), sehingga kalau
+  // ikut ditambahkan, ER meledak jauh dari kenyataan (terbukti dari
+  // perbandingan dengan HypeAuditor & tools sejenis). Saves/shares (yang
+  // dipakai formula "Extended ER") juga tidak diikutkan karena data itu
+  // cuma tersedia lewat API resmi milik akun, tidak bisa didapat dari
+  // scraping publik.
+  // Hitung ER per post pakai formula standar ("ER by Followers"), lalu
+  // cap HANYA nilai yang benar-benar mustahil (>300%) sebagai pengaman
+  // terakhir. Semua post lain — termasuk yang performanya tinggi tapi
+  // masih masuk akal (puluhan persen) — TETAP dihitung apa adanya, tidak
+  // dibuang. Ini pilihan sadar: lebih baik sedikit lebih tinggi dari
+  // "rata-rata industri" untuk akun yang memang sering viral, daripada
+  // memotong data valid demi mengejar angka yang cocok ke 1 tools
+  // tertentu (yang toh berbeda-beda satu sama lain).
+  let anomalyCount = 0;
+  const engagementRates = latestPosts.map((p) => {
+    if (profile.followers <= 0) return 0;
+    const rawRate = ((p.likes ?? 0) + (p.comments ?? 0)) / profile.followers * 100;
+    if (rawRate > MAX_ENGAGEMENT_RATE_PER_POST) anomalyCount++;
+    return Math.min(rawRate, MAX_ENGAGEMENT_RATE_PER_POST);
+  });
+  if (anomalyCount > 0) {
+    console.log(
+      `  [INFO] ${anomalyCount} post dengan ER mentah > ${MAX_ENGAGEMENT_RATE_PER_POST}% (kemungkinan reach ekstrem/anomali), sudah di-cap`
+    );
+  }
+  const avgEngagement = average(engagementRates);
+
+  // Post carousel/foto tunggal memang tidak punya views di Instagram, jadi
+  // tidak diikutkan ke avgView/avgViewBrand (metrik views khusus video).
+  const videoPosts = latestPosts.filter(
+    (p) => p.views !== null && p.views !== undefined && p.views > 0
+  );
+  const avgView = average(videoPosts.map((p) => p.views as number));
+  console.log(
+    `  [INFO] ${videoPosts.length}/${latestPosts.length} post (dari sample metrics) punya data views`
+  );
+
+  const brandedVideoPosts = videoPosts.filter((p) => p.is_endorse);
+  const avgViewBrand = average(brandedVideoPosts.map((p) => p.views as number));
+
+  const insights = computeInsightsFromPosts(
+    latestPosts.map((p) => ({
+      caption: p.caption ?? "",
+      likes: p.likes ?? 0,
+      comments: p.comments ?? 0,
+      views: p.views ?? undefined,
+      postedAt: (p.posted_at ?? new Date(0)).toISOString(),
+      postUrl: p.post_url ?? "",
+      thumbnailUrl: p.thumbnail_url ?? undefined,
+    })),
+    profile.followers,
+    profile.totalPost
+  );
+
+  // 9. UPDATE creator dengan metrics yang sudah dihitung dari sample DB.
+  await prisma.mst_creators.update({
+    where: { id: creator.id },
+    data: {
+      engagement_rate: avgEngagement.toFixed(2),
+      average_view: Math.round(avgView),
+      average_view_brand: Math.round(avgViewBrand),
+      avg_likes: insights.avgLikes,
+      avg_comments: insights.avgComments,
+      top_hashtags: insights.topHashtags as unknown as Prisma.InputJsonValue,
+      top_mentions: insights.topMentions as unknown as Prisma.InputJsonValue,
+      updated_at: new Date(),
+    },
+  });
+
+  console.log(
+    `  [OK] creator id ${creator.id}, tier ${tier}, engagement ${avgEngagement.toFixed(2)}%`
+  );
+
+  // 10. Cari username baru dari bio/mention (pakai post yang baru
+  //     di-scrape kali ini saja — tidak perlu dari latestPosts DB).
   const newUsernames = await suggestNewUsernames(
     profile.bio ?? "",
     profile.posts
