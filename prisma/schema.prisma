@@ -157,14 +157,15 @@ model mst_cities {
 }
 
 model mst_dbest {
-  bst_id     Int       @id @default(autoincrement())
-  bst_nama   String?   @db.VarChar(100)
-  bst_alamat String?   @db.VarChar(100)
-  bst_status Int?      @default(1)
-  creaby     String?   @db.VarChar(20)
-  creadate   DateTime? @default(now()) @db.Timestamp(6)
-  modiby     String?   @db.VarChar(20)
-  modidate   DateTime? @default(now()) @db.Timestamp(6)
+  bst_id      Int           @id @default(autoincrement())
+  bst_nama    String?       @db.VarChar(100)
+  bst_alamat  String?       @db.VarChar(100)
+  bst_status  Int?          @default(1)
+  creaby      String?       @db.VarChar(20)
+  creadate    DateTime?     @default(now()) @db.Timestamp(6)
+  modiby      String?       @db.VarChar(20)
+  modidate    DateTime?     @default(now()) @db.Timestamp(6)
+  trs_project trs_project[]
 }
 
 model mst_general_filters {
@@ -198,10 +199,12 @@ model trs_project {
   prj_sheet_sync       DateTime?     @db.Timestamp(6)
   prj_sheetid          String?       @db.VarChar(150)
   prj_sheeturl         String?
-  prj_invoice_tax_rate Decimal?      @db.Decimal(5, 2)
   prj_tax_rate         Decimal       @default(11.00) @db.Decimal(5, 2)
+  prj_invoice_tax_rate Decimal?      @db.Decimal(5, 2)
+  prj_dbestid          Int?
   dtl_project          dtl_project[]
   mst_brand            mst_brand     @relation(fields: [prj_brand], references: [brd_id], map: "fk_trs_project_brand")
+  mst_dbest            mst_dbest?    @relation(fields: [prj_dbestid], references: [bst_id], onUpdate: NoAction, map: "fk_trs_project_dbest")
   mst_payment          mst_payment?  @relation(fields: [prj_paymentid], references: [pyt_id], onUpdate: NoAction, map: "fk_trs_project_payment")
 }
 
@@ -230,6 +233,12 @@ model mst_creators {
   avg_comments       Int?                @default(0)
   top_hashtags       Json?               @default("[]")
   top_mentions       Json?               @default("[]")
+  er_followers       Decimal?            @default(0.00) @db.Decimal(5, 2)
+  er_views           Decimal?            @default(0.00) @db.Decimal(5, 2)
+  er_talenthub       Decimal?            @default(0.00) @db.Decimal(5, 2)
+  avg_shares         Int?                @default(0)
+  avg_saves          Int?                @default(0)
+  avg_reposts        Int?                @default(0)
   dtl_creator_posts  dtl_creator_posts[]
   dtl_project        dtl_project[]
   mst_categories     mst_categories?     @relation(fields: [category_id], references: [id], onUpdate: NoAction, map: "fk_creator_category")
@@ -252,6 +261,9 @@ model dtl_creator_posts {
   posted_at     DateTime?    @db.Timestamp(6)
   scraped_at    DateTime     @default(now()) @db.Timestamp(6)
   thumbnail_url String?
+  shares        Int?
+  saves         Int?
+  reposts       Int?
   mst_creators  mst_creators @relation(fields: [creator_id], references: [id], onDelete: Cascade, map: "fk_post_creator")
 
   @@unique([creator_id, posted_at, caption], name: "uq_creator_post", map: "uq_creator_post")
@@ -268,19 +280,6 @@ model stg_discovered_usernames {
   validated_at      DateTime?
 
   @@unique([username, social_media], map: "uq_discovered_username_platform")
-}
-
-model stg_scrape_jobs {
-  id          Int       @id @default(autoincrement())
-  username    String
-  platform    String
-  category    String?
-  status      String    @default("pending")
-  attempts    Int       @default(0)
-  last_error  String?
-  started_at  DateTime?
-  finished_at DateTime?
-  created_at  DateTime  @default(now())
 }
 
 model mst_apify_tokens {

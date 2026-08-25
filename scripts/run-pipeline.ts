@@ -1,53 +1,123 @@
-import 'dotenv/config';
-import { processCreator, prisma, SeedEntry } from '../lib/pipeline';
+import "dotenv/config";
+import { processCreator, prisma, SeedEntry } from "../lib/pipeline";
 
-const REFRESH_INTERVAL_DAYS = 7; // sesuai kesepakatan: refresh tiap 7 hari
+const RETRY_COUNT = 3;
+const RETRY_DELAY_MS = 5000;
+
+// Masukkan username tanpa @
+// Platform hanya boleh "instagram" atau "tiktok"
+const seed: SeedEntry[] = [
+  {
+    username: "denny_caknan",
+    platform: "instagram",
+  },
+];
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function processWithRetry(
+  entry: SeedEntry,
+  retry: number = RETRY_COUNT
+) {
+  try {
+    return await processCreator(entry);
+  } catch (err) {
+    console.error(
+      `[FAILED] ${entry.username} (${entry.platform})`,
+      err
+    );
+
+    if (retry <= 1) {
+      throw err;
+    }
+
+    console.log(
+      `[RETRY] ${entry.username}, sisa percobaan ${retry - 1}`
+    );
+
+    await sleep(RETRY_DELAY_MS);
+
+    return processWithRetry(entry, retry - 1);
+  }
+}
 
 async function main() {
-  const cutoffDate = new Date();
-  cutoffDate.setDate(cutoffDate.getDate() - REFRESH_INTERVAL_DAYS);
+  const validSeed: SeedEntry[] = seed
+    .map((entry) => ({
+      ...entry,
+      username: entry.username.trim().replace(/^@/, ""),
+    }))
+    .filter((entry) => entry.username.length > 0);
 
-  // Cuma ambil creator yang:
-  // - belum pernah di-scrape sama sekali (last_scraped_at masih null), ATAU
-  // - terakhir di-scrape SUDAH LEBIH dari REFRESH_INTERVAL_DAYS hari yang lalu
-  const dueCreators = await prisma.mst_creators.findMany({
-    where: {
-      OR: [
-        { last_scraped_at: null },
-        { last_scraped_at: { lt: cutoffDate } },
-      ],
-    },
-    select: { username: true, social_media: true, last_scraped_at: true },
-  });
+  console.log(`
+================================
+TOTAL CREATOR : ${validSeed.length}
+RETRY         : ${RETRY_COUNT} kali
+================================
+`);
 
-  const seed: SeedEntry[] = dueCreators.map(c => ({
-    username: c.username,
-    platform: c.social_media as 'instagram' | 'tiktok',
-  }));
+  const results = {
+    success: 0,
+    skipped: 0,
+    error: 0,
+  };
 
-  console.log(
-    `Total ${seed.length} akun jatuh tempo untuk di-refresh (interval ${REFRESH_INTERVAL_DAYS} hari)`
-  );
+  for (const entry of validSeed) {
+    console.log(`
+--- START ${entry.username} (${entry.platform}) ---
+`);
 
-  const results = { success: 0, skipped: 0, error: 0 };
-
-  for (const entry of seed) {
     try {
-      const result = await processCreator(entry);
-      if (result?.status === 'success') results.success++;
-      if (result?.status === 'skipped') results.skipped++;
+      const result = await processWithRetry(entry);
+
+      if (result?.status === "success") {
+        results.success++;
+
+        console.log(
+          `[SUCCESS] ${entry.username} (${entry.platform})`
+        );
+      } else if (result?.status === "skipped") {
+        results.skipped++;
+
+        console.log(
+          `[SKIPPED] ${entry.username} (${entry.platform})`
+        );
+      } else {
+        console.warn(
+          `[UNKNOWN STATUS] ${entry.username} (${entry.platform})`,
+          result
+        );
+      }
     } catch (err) {
-      console.error(`  [ERROR] ${entry.username}:`, err);
       results.error++;
+
+      console.error(
+        `[FINAL ERROR] ${entry.username} (${entry.platform})`,
+        err
+      );
     }
   }
 
-  console.log('\n=== RINGKASAN ===');
-  console.log(`Berhasil: ${results.success}`);
-  console.log(`Dilewati: ${results.skipped}`);
-  console.log(`Error: ${results.error}`);
+  console.log(`
+================================
+SUMMARY
+
+TOTAL   : ${validSeed.length}
+SUCCESS : ${results.success}
+SKIPPED : ${results.skipped}
+ERROR   : ${results.error}
+
+================================
+`);
 }
 
 main()
-  .catch(console.error)
-  .finally(() => prisma.$disconnect());
+  .catch((err) => {
+    console.error("[FATAL ERROR]", err);
+    process.exitCode = 1;
+  })
+  .finally(async () => {
+    await prisma.$disconnect();
+  });

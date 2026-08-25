@@ -39,8 +39,9 @@ export interface SeedEntry {
 // kecil untuk akun yang jarang posting (mirip masalah awal sebelum
 // MAX_METRICS_SAMPLE diperkenalkan). Proses scraping tetap mengambil
 // hingga 30 post per scrape (lihat lib/apify.ts) untuk membangun history
-// yang cukup di DB — cuma ER yang dihitung dari 12 TERAKHIR, bukan semua.
-const MAX_METRICS_SAMPLE = 12;
+// yang cukup di DB — cuma ER yang dihitung dari 24 TERAKHIR, bukan semua.
+const MAX_METRICS_SAMPLE = 20;
+const POST_LIMIT = 20;
 
 function average(nums: number[]): number {
   if (nums.length === 0) return 0;
@@ -62,7 +63,9 @@ function average(nums: number[]): number {
 // mudah dipertanggungjawabkan), dan hanya menjaga dari kasus yang jelas
 // tidak masuk akal (>300%) sebagai pengaman terakhir — bukan mengejar
 // kecocokan sempurna ke satu tool tertentu.
-const MAX_ENGAGEMENT_RATE_PER_POST = 300; // dalam persen
+
+
+const MIN_FOLLOWERS = 5000;
 
 function calculateTier(followers: number): string {
   if (followers >= 1_000_000) return "Mega";
@@ -88,7 +91,54 @@ function mostCommonLocation(posts: RawPost[]): string | null {
   return best;
 }
 
-const MIN_FOLLOWERS = 5000;
+// Dipanggil di setiap titik "skip" pada processCreator. Kalau creator ini
+// SUDAH ADA di mst_creators (misal dari refresh mingguan — dulu lolos
+// kriteria, sekarang tidak lagi: follower turun, akun jadi private/hilang,
+// atau ke-detect bukan akun Indonesia), row-nya dihapus supaya tidak lagi
+// muncul di discovery/listing. Kalau belum pernah ada di DB (kandidat baru
+// dari staging), findUnique return null dan fungsi ini no-op — aman
+// dipanggil dari flow manapun.
+async function removeCreatorIfExists(
+  username: string,
+  socialMedia: string,
+  reason: string
+) {
+  const existing = await prisma.mst_creators.findUnique({
+    where: {
+      username_social_media: {
+        username,
+        social_media: socialMedia,
+      },
+    },
+  });
+
+  if (!existing) return;
+
+  try {
+    await prisma.$transaction(async (tx) => {
+      // hapus posting creator
+      await tx.dtl_creator_posts.deleteMany({
+        where: {
+          creator_id: existing.id,
+        },
+      });
+
+      // TODO:
+      // jika ada tabel lain yang punya FK creator_id,
+      // tambahkan delete di sini
+
+      await tx.mst_creators.delete({
+        where: {
+          id: existing.id,
+        },
+      });
+    });
+
+    console.log(`[DELETE] ${username} (${socialMedia}) - ${reason}`);
+  } catch (err) {
+    console.error(`[ERROR DELETE] ${username}`, err);
+  }
+}
 
 export async function processCreator(
   entry: SeedEntry,
@@ -131,6 +181,11 @@ export async function processCreator(
 
   if (!profile || !profile.isValid) {
     console.log("  [SKIP] username tidak valid/tidak ditemukan");
+    await removeCreatorIfExists(
+      entry.username,
+      entry.platform,
+      "username tidak valid/tidak ditemukan"
+    );
     return { status: "skipped", username: entry.username };
   }
 
@@ -140,6 +195,11 @@ export async function processCreator(
     console.log(
       `  [SKIP] ${profile.username} — follower ${profile.followers} < ${MIN_FOLLOWERS}`
     );
+    await removeCreatorIfExists(
+      profile.username,
+      profile.socialMedia,
+      `follower ${profile.followers} < ${MIN_FOLLOWERS}`
+    );
     return { status: "skipped", username: entry.username };
   }
 
@@ -148,7 +208,7 @@ export async function processCreator(
   //     sama supaya konsisten dengan filter di atas. TikTok sudah otomatis
   //     punya posts dari step 1 (nggak perlu request tambahan).
   if (entry.platform === "instagram" && profile.posts.length === 0) {
-    profile.posts = await scrapeInstagramPosts(profile.username, sinceDate);
+    profile.posts = await scrapeInstagramPosts(profile.username);
   }
 
   // 2. Cek lokasi Indonesia (Gemini)
@@ -159,6 +219,11 @@ export async function processCreator(
   if (!locationCheck.isIndonesian) {
     console.log(
       `  [SKIP] ${profile.username} — kemungkinan bukan akun Indonesia`
+    );
+    await removeCreatorIfExists(
+      profile.username,
+      profile.socialMedia,
+      "bukan akun Indonesia"
     );
     return { status: "skipped", username: entry.username };
   }
@@ -189,7 +254,9 @@ export async function processCreator(
     ));
 
   if (entry.category) {
-    console.log(`  [INFO] kategori diwariskan: ${entry.category} (skip Gemini)`);
+    console.log(
+      `  [INFO] kategori diwariskan: ${entry.category} (skip Gemini)`
+    );
   }
 
   const gender = await detectGender(
@@ -258,9 +325,13 @@ export async function processCreator(
   });
 
   // 6. Insert/update tiap post yang BARU di-scrape kali ini ke DB.
+  const latestScrapedPosts = profile.posts
+    .filter((p) => p.postUrl)
+    .slice(0, POST_LIMIT);
+
   let savedPosts = 0;
-  for (let i = 0; i < profile.posts.length; i++) {
-    const p = profile.posts[i];
+  for (let i = 0; i < latestScrapedPosts.length; i++) {
+    const p = latestScrapedPosts[i];
     try {
       await prisma.dtl_creator_posts.upsert({
         where: {
@@ -271,24 +342,32 @@ export async function processCreator(
           },
         },
         update: {
-          likes: p.likes,
-          comments: p.comments,
-          views: p.views,
+          likes: p.likes ?? 0,
+          comments: p.comments ?? 0,
+          views: p.views ?? 0,
+          shares: p.shares ?? 0,
+          saves: p.saves ?? 0,
+          reposts: p.reposts ?? 0,
           post_url: p.postUrl,
           thumbnail_url: p.thumbnailUrl,
+
           is_endorse:
             endorseResults.find((e) => e.index === i)?.isEndorse ?? false,
         },
         create: {
           creator_id: creator.id,
           caption: p.caption,
-          likes: p.likes,
-          comments: p.comments,
-          views: p.views,
+          likes: p.likes ?? 0,
+          comments: p.comments ?? 0,
+          views: p.views ?? 0,
+          shares: p.shares ?? 0,
+          saves: p.saves ?? 0,
+          reposts: p.reposts ?? 0,
           post_url: p.postUrl,
           thumbnail_url: p.thumbnailUrl,
           is_endorse:
             endorseResults.find((e) => e.index === i)?.isEndorse ?? false,
+
           posted_at: new Date(p.postedAt),
         },
       });
@@ -297,7 +376,7 @@ export async function processCreator(
       console.error(`  Gagal simpan post index ${i}:`, err);
     }
   }
-  console.log(`  [OK] ${savedPosts}/${profile.posts.length} post baru tersimpan`);
+  console.log(`[OK] ${savedPosts}/${latestScrapedPosts.length} post tersimpan`);
 
   // 7. AMBIL MAX_METRICS_SAMPLE POST TERAKHIR dari DB (bukan cuma yang baru
   //    di-scrape kali ini). Ini kuncinya: post lama dari refresh-refresh
@@ -311,41 +390,6 @@ export async function processCreator(
   console.log(
     `  [INFO] hitung metrics dari ${latestPosts.length} post terakhir di DB`
   );
-
-  // 8. Hitung metrics dari latestPosts (bukan dari profile.posts lagi).
-  //    ER = ((likes + comments + views) / followers) * 100 per post,
-  //    dirata-ratakan. Views ikut di pembilang sesuai keputusan produk —
-  //    post foto/carousel yang tidak punya views dianggap 0.
-  // ER = ((likes + comments) / followers) * 100 — mengikuti formula
-  // standar industri ("ER by Followers"), TANPA views di pembilang.
-  // Views sengaja TIDAK diikutkan: nilainya jauh lebih besar dari
-  // likes+comments (bisa jutaan per post untuk akun besar), sehingga kalau
-  // ikut ditambahkan, ER meledak jauh dari kenyataan (terbukti dari
-  // perbandingan dengan HypeAuditor & tools sejenis). Saves/shares (yang
-  // dipakai formula "Extended ER") juga tidak diikutkan karena data itu
-  // cuma tersedia lewat API resmi milik akun, tidak bisa didapat dari
-  // scraping publik.
-  // Hitung ER per post pakai formula standar ("ER by Followers"), lalu
-  // cap HANYA nilai yang benar-benar mustahil (>300%) sebagai pengaman
-  // terakhir. Semua post lain — termasuk yang performanya tinggi tapi
-  // masih masuk akal (puluhan persen) — TETAP dihitung apa adanya, tidak
-  // dibuang. Ini pilihan sadar: lebih baik sedikit lebih tinggi dari
-  // "rata-rata industri" untuk akun yang memang sering viral, daripada
-  // memotong data valid demi mengejar angka yang cocok ke 1 tools
-  // tertentu (yang toh berbeda-beda satu sama lain).
-  let anomalyCount = 0;
-  const engagementRates = latestPosts.map((p) => {
-    if (profile.followers <= 0) return 0;
-    const rawRate = ((p.likes ?? 0) + (p.comments ?? 0)) / profile.followers * 100;
-    if (rawRate > MAX_ENGAGEMENT_RATE_PER_POST) anomalyCount++;
-    return Math.min(rawRate, MAX_ENGAGEMENT_RATE_PER_POST);
-  });
-  if (anomalyCount > 0) {
-    console.log(
-      `  [INFO] ${anomalyCount} post dengan ER mentah > ${MAX_ENGAGEMENT_RATE_PER_POST}% (kemungkinan reach ekstrem/anomali), sudah di-cap`
-    );
-  }
-  const avgEngagement = average(engagementRates);
 
   // Post carousel/foto tunggal memang tidak punya views di Instagram, jadi
   // tidak diikutkan ke avgView/avgViewBrand (metrik views khusus video).
@@ -363,11 +407,23 @@ export async function processCreator(
   const insights = computeInsightsFromPosts(
     latestPosts.map((p) => ({
       caption: p.caption ?? "",
+
       likes: p.likes ?? 0,
+
       comments: p.comments ?? 0,
-      views: p.views ?? undefined,
+
+      views: p.views ?? 0,
+
+      shares: p.shares ?? 0,
+
+      saves: p.saves ?? 0,
+
+      reposts: p.reposts ?? 0,
+
       postedAt: (p.posted_at ?? new Date(0)).toISOString(),
+
       postUrl: p.post_url ?? "",
+
       thumbnailUrl: p.thumbnail_url ?? undefined,
     })),
     profile.followers,
@@ -378,20 +434,35 @@ export async function processCreator(
   await prisma.mst_creators.update({
     where: { id: creator.id },
     data: {
-      engagement_rate: avgEngagement.toFixed(2),
+      engagement_rate: insights.erFollowers,
+
+      er_followers: insights.erFollowers,
+
+      er_views: insights.erViews,
+
+      er_talenthub: insights.erTalenthub,
+
       average_view: Math.round(avgView),
+
       average_view_brand: Math.round(avgViewBrand),
+
       avg_likes: insights.avgLikes,
+
       avg_comments: insights.avgComments,
-      top_hashtags: insights.topHashtags as unknown as Prisma.InputJsonValue,
-      top_mentions: insights.topMentions as unknown as Prisma.InputJsonValue,
+
+      avg_shares: insights.avgShares,
+
+      avg_saves: insights.avgSaves,
+
+      avg_reposts: insights.avgReposts,
+
+      top_hashtags: insights.topHashtags as any,
+
+      top_mentions: insights.topMentions as any,
+
       updated_at: new Date(),
     },
   });
-
-  console.log(
-    `  [OK] creator id ${creator.id}, tier ${tier}, engagement ${avgEngagement.toFixed(2)}%`
-  );
 
   // 10. Cari username baru dari bio/mention (pakai post yang baru
   //     di-scrape kali ini saja — tidak perlu dari latestPosts DB).
