@@ -8,7 +8,7 @@ import {
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY_MS = 5000;
-const CREATOR_LIMIT = 50;
+const CREATOR_LIMIT = 250;
 
 async function sleep(ms: number) {
   return new Promise((resolve) =>
