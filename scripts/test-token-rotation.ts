@@ -8,7 +8,7 @@ const prisma = new PrismaClient();
  * id 110 adalah akun-109.
  * Jadi akun-110 dimulai dari id 111.
  */
-const START_FROM_ID = 110;
+const START_FROM_ID = 210;
 
 type TokenCheckResult = {
   id: number;
