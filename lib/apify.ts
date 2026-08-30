@@ -40,6 +40,24 @@ function normalizeCount(value: unknown): number {
   return Math.round(number);
 }
 
+function normalizePostedAt(value: unknown): string {
+  if (
+    typeof value !== "string" &&
+    typeof value !== "number" &&
+    !(value instanceof Date)
+  ) {
+    return "";
+  }
+
+  const date = new Date(value);
+
+  if (!Number.isFinite(date.getTime())) {
+    return "";
+  }
+
+  return date.toISOString();
+}
+
 // Jeda antar scrape ulang per-URL biar nggak langsung kena rate limit.
 const PER_URL_SCRAPE_DELAY_MS = 1200;
 
@@ -165,6 +183,9 @@ export async function scrapeInstagramPosts(
       directUrls: [`https://www.instagram.com/${username}/`],
       resultsType: "posts",
       resultsLimit: limit,
+      // Pinned post lama tidak boleh menggantikan post terbaru
+      // dalam sampel perhitungan performance/ER.
+      skipPinnedPosts: true,
     };
 
     if (sinceDate) {
@@ -173,25 +194,78 @@ export async function scrapeInstagramPosts(
     }
 
     const run = await client.actor("apify/instagram-scraper").call(input);
-    const { items } = await client.dataset(run.defaultDatasetId).listItems();
+    const { items } = await client
+      .dataset(run.defaultDatasetId)
+      .listItems({ limit });
 
-    return (items as any[]).slice(0, limit).map((p: any) => ({
-      caption: p.caption ?? "",
-      likes: normalizeCount(p.likesCount ?? p.likeCount ?? p.likes),
-      comments: normalizeCount(
-        p.commentsCount ?? p.commentCount ?? p.comments
-      ),
-      views: normalizeCount(p.videoViewCount ?? p.viewsCount ?? p.views),
-      shares: normalizeCount(p.shareCount ?? p.sharesCount ?? p.shares),
-      saves: normalizeCount(p.saveCount ?? p.savesCount ?? p.saves),
-      reposts: normalizeCount(p.repostCount ?? p.repostsCount ?? p.reposts),
-      postedAt: p.timestamp ?? p.takenAtIso ?? new Date().toISOString(),
-      postUrl:
-        p.url ?? (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ""),
-      thumbnailUrl: p.displayUrl ?? p.display_url,
-      locationName: p.locationName,
-    })) as RawPost[];
+    const normalizedPosts = (items as any[]).map(
+      (p: any): RawPost => ({
+        caption: p.caption ?? "",
+        likes: normalizeCount(p.likesCount ?? p.likeCount ?? p.likes),
+        comments: normalizeCount(
+          p.commentsCount ?? p.commentCount ?? p.comments
+        ),
+        views: normalizeCount(
+          p.videoViewCount ??
+            p.videoPlayCount ??
+            p.viewsCount ??
+            p.views
+        ),
+        shares: normalizeCount(
+          p.shareCount ?? p.sharesCount ?? p.shares
+        ),
+        saves: normalizeCount(
+          p.saveCount ?? p.savesCount ?? p.saves
+        ),
+        reposts: normalizeCount(
+          p.repostCount ?? p.repostsCount ?? p.reposts
+        ),
+        postedAt: normalizePostedAt(
+          p.timestamp ?? p.takenAtIso ?? p.takenAt
+        ),
+        postUrl:
+          p.url ??
+          (p.shortCode
+            ? `https://www.instagram.com/p/${p.shortCode}/`
+            : ""),
+        thumbnailUrl:
+          p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
+        locationName: p.locationName ?? p.location?.name,
+      })
+    );
+
+    // Hilangkan post tanpa identitas/tanggal valid dan URL duplikat.
+    const uniquePosts = new Map<string, RawPost>();
+
+    for (const post of normalizedPosts) {
+      const postedTime = new Date(post.postedAt).getTime();
+
+      if (!post.postUrl || !Number.isFinite(postedTime)) {
+        console.warn(
+          `  [SKIP POST] URL/tanggal tidak valid: ${post.postUrl || "tanpa URL"}`
+        );
+        continue;
+      }
+
+      if (!uniquePosts.has(post.postUrl)) {
+        uniquePosts.set(post.postUrl, post);
+      }
+    }
+
+    // Apify sudah melewati pinned post. Sorting ini menjadi pengaman
+    // tambahan agar urutan akhir selalu berdasarkan tanggal terbaru.
+    return Array.from(uniquePosts.values())
+      .sort(
+        (a, b) =>
+          new Date(b.postedAt).getTime() -
+          new Date(a.postedAt).getTime()
+      )
+      .slice(0, limit);
   });
+
+  console.log(
+    `  [INSTAGRAM] ${bulkPosts.length} post terbaru dipilih; pinned post dilewati`
+  );
 
   return enrichPosts(bulkPosts, "instagram");
 }

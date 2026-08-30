@@ -44,8 +44,8 @@ export interface SeedEntry {
 // MAX_METRICS_SAMPLE diperkenalkan). Proses scraping tetap mengambil
 // hingga 30 post per scrape (lihat lib/apify.ts) untuk membangun history
 // yang cukup di DB — cuma ER yang dihitung dari 24 TERAKHIR, bukan semua.
-const MAX_METRICS_SAMPLE = 16;
-const POST_LIMIT = 16;
+const MAX_METRICS_SAMPLE = 20;
+const POST_LIMIT = 20;
 
 function average(nums: number[]): number {
   if (nums.length === 0) return 0;
