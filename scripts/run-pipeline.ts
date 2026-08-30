@@ -8,7 +8,7 @@ const RETRY_DELAY_MS = 5000;
 // Platform hanya boleh "instagram" atau "tiktok"
 const seed: SeedEntry[] = [
   {
-    username: "denny_caknan",
+    username: "dr.tirta",
     platform: "instagram",
   },
 ];

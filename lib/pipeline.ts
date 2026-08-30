@@ -14,6 +14,10 @@ import {
   detectGender,
 } from "./gemini";
 import { computeInsightsFromPosts } from "./insights";
+import {
+  firstProfileImageUrl,
+  persistFirstProfileImage,
+} from "./profile-image";
 
 const prisma = new PrismaClient();
 
@@ -40,8 +44,8 @@ export interface SeedEntry {
 // MAX_METRICS_SAMPLE diperkenalkan). Proses scraping tetap mengambil
 // hingga 30 post per scrape (lihat lib/apify.ts) untuk membangun history
 // yang cukup di DB — cuma ER yang dihitung dari 24 TERAKHIR, bukan semua.
-const MAX_METRICS_SAMPLE = 20;
-const POST_LIMIT = 20;
+const MAX_METRICS_SAMPLE = 16;
+const POST_LIMIT = 16;
 
 function average(nums: number[]): number {
   if (nums.length === 0) return 0;
@@ -156,20 +160,24 @@ export async function processCreator(
   //      berikutnya jauh lebih ringan/murah dibanding scrape pertama kali.
   //    Kalau preScrapedProfile sudah dikasih (dipanggil dari Flow 2/3 yang
   //    sudah scrape duluan), langkah ini di-skip karena tidak relevan lagi.
-  let sinceDate: Date | undefined;
-  if (!preScrapedProfile) {
-    const existing = await prisma.mst_creators.findUnique({
-      where: {
-        username_social_media: {
-          username: entry.username,
-          social_media: entry.platform,
-        },
+  const existingCreator = await prisma.mst_creators.findUnique({
+    where: {
+      username_social_media: {
+        username: entry.username,
+        social_media: entry.platform,
       },
-      select: { last_scraped_at: true },
-    });
-    if (existing?.last_scraped_at) {
-      sinceDate = existing.last_scraped_at;
-    }
+    },
+    select: {
+      id: true,
+      photo_url: true,
+      last_scraped_at: true,
+    },
+  });
+
+  let sinceDate: Date | undefined;
+
+  if (!preScrapedProfile && existingCreator?.last_scraped_at) {
+    sinceDate = existingCreator.last_scraped_at;
   }
 
   // 1. Scrape PROFIL DULU AJA (murah — 1 request untuk IG, TikTok tetap gabung)
@@ -208,7 +216,11 @@ export async function processCreator(
   //     sama supaya konsisten dengan filter di atas. TikTok sudah otomatis
   //     punya posts dari step 1 (nggak perlu request tambahan).
   if (entry.platform === "instagram" && profile.posts.length === 0) {
-    profile.posts = await scrapeInstagramPosts(profile.username);
+    profile.posts = await scrapeInstagramPosts(
+      profile.username,
+      sinceDate,
+      POST_LIMIT
+    );
   }
 
   // 2. Cek lokasi Indonesia (Gemini)
@@ -286,6 +298,26 @@ export async function processCreator(
 
   const tier = calculateTier(profile.followers);
 
+  // URL Instagram/TikTok bersifat sementara. Salin ke Vercel Blob sebelum
+  // menyimpan creator. Jika gagal, pertahankan foto permanen lama.
+  const temporaryPhotoUrl = firstProfileImageUrl([
+    ...(profile.photoUrls ?? []),
+    profile.photoUrl,
+  ]);
+
+  const uploadedPhotoUrl = temporaryPhotoUrl
+    ? await persistFirstProfileImage(
+        [temporaryPhotoUrl],
+        {
+          username: profile.username,
+          platform: entry.platform,
+        }
+      )
+    : null;
+
+  const permanentPhotoUrl =
+    uploadedPhotoUrl ?? existingCreator?.photo_url ?? null;
+
   // 5. Upsert creator DULU (tanpa metrics ER/views/dll). Kita butuh
   //    creator.id buat nyimpen post di step berikutnya. Metrics dihitung
   //    dan di-UPDATE belakangan (step 8-9), setelah post baru tersimpan
@@ -301,12 +333,14 @@ export async function processCreator(
       followers: profile.followers,
       following: profile.following,
       total_post: profile.totalPost,
-      photo_url: profile.photoUrl,
+      // Jangan pernah menimpa foto lama dengan null ketika Blob gagal.
+      ...(permanentPhotoUrl
+        ? { photo_url: permanentPhotoUrl }
+        : {}),
       tier,
       category_id: category.id,
       city_id: cityId,
       gender,
-      last_scraped_at: new Date(),
       updated_at: new Date(),
     },
     create: {
@@ -315,7 +349,7 @@ export async function processCreator(
       followers: profile.followers,
       following: profile.following,
       total_post: profile.totalPost,
-      photo_url: profile.photoUrl,
+      photo_url: permanentPhotoUrl,
       social_media: profile.socialMedia,
       tier,
       category_id: category.id,
@@ -459,6 +493,9 @@ export async function processCreator(
       top_hashtags: insights.topHashtags as any,
 
       top_mentions: insights.topMentions as any,
+
+      // Baru dianggap selesai setelah creator, post, dan insight tersimpan.
+      last_scraped_at: new Date(),
 
       updated_at: new Date(),
     },
