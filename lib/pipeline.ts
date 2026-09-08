@@ -151,15 +151,6 @@ export async function processCreator(
   console.log(`\n--- ${entry.username} (${entry.platform}) ---`);
 
   // 0. Tentukan rentang tanggal post yang mau diambil:
-  //    - Creator BARU (belum pernah di-scrape): sinceDate = undefined
-  //      → scraper ambil sampai MAX_METRICS_SAMPLE post TERBARU apa
-  //      adanya, tanpa batas tanggal (lihat lib/apify.ts).
-  //    - Creator LAMA (sudah pernah di-scrape sebelumnya): sinceDate =
-  //      last_scraped_at → scraper cuma narik post yang di-upload SEJAK
-  //      tanggal itu, bukan histori penuh lagi. Ini yang bikin scrape
-  //      berikutnya jauh lebih ringan/murah dibanding scrape pertama kali.
-  //    Kalau preScrapedProfile sudah dikasih (dipanggil dari Flow 2/3 yang
-  //    sudah scrape duluan), langkah ini di-skip karena tidak relevan lagi.
   const existingCreator = await prisma.mst_creators.findUnique({
     where: {
       username_social_media: {
