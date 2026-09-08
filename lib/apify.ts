@@ -206,30 +206,16 @@ export async function scrapeInstagramPosts(
           p.commentsCount ?? p.commentCount ?? p.comments
         ),
         views: normalizeCount(
-          p.videoViewCount ??
-            p.videoPlayCount ??
-            p.viewsCount ??
-            p.views
+          p.videoViewCount ?? p.videoPlayCount ?? p.viewsCount ?? p.views
         ),
-        shares: normalizeCount(
-          p.shareCount ?? p.sharesCount ?? p.shares
-        ),
-        saves: normalizeCount(
-          p.saveCount ?? p.savesCount ?? p.saves
-        ),
-        reposts: normalizeCount(
-          p.repostCount ?? p.repostsCount ?? p.reposts
-        ),
-        postedAt: normalizePostedAt(
-          p.timestamp ?? p.takenAtIso ?? p.takenAt
-        ),
+        shares: normalizeCount(p.shareCount ?? p.sharesCount ?? p.shares),
+        saves: normalizeCount(p.saveCount ?? p.savesCount ?? p.saves),
+        reposts: normalizeCount(p.repostCount ?? p.repostsCount ?? p.reposts),
+        postedAt: normalizePostedAt(p.timestamp ?? p.takenAtIso ?? p.takenAt),
         postUrl:
           p.url ??
-          (p.shortCode
-            ? `https://www.instagram.com/p/${p.shortCode}/`
-            : ""),
-        thumbnailUrl:
-          p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
+          (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ""),
+        thumbnailUrl: p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
         locationName: p.locationName ?? p.location?.name,
       })
     );
@@ -242,7 +228,9 @@ export async function scrapeInstagramPosts(
 
       if (!post.postUrl || !Number.isFinite(postedTime)) {
         console.warn(
-          `  [SKIP POST] URL/tanggal tidak valid: ${post.postUrl || "tanpa URL"}`
+          `  [SKIP POST] URL/tanggal tidak valid: ${
+            post.postUrl || "tanpa URL"
+          }`
         );
         continue;
       }
@@ -257,8 +245,7 @@ export async function scrapeInstagramPosts(
     return Array.from(uniquePosts.values())
       .sort(
         (a, b) =>
-          new Date(b.postedAt).getTime() -
-          new Date(a.postedAt).getTime()
+          new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime()
       )
       .slice(0, limit);
   });
@@ -439,6 +426,22 @@ function imageUrls(...values: unknown[]): string[] {
   return [...new Set(result)];
 }
 
+function isApifyStorageUrl(value?: string): boolean {
+  if (!value) return false;
+
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+
+    return (
+      hostname === "api.apify.com" ||
+      hostname === "apify.com" ||
+      hostname.endsWith(".apify.com")
+    );
+  } catch {
+    return false;
+  }
+}
+
 function returnedContentUrl(
   item: Record<string, unknown>,
   platform: SocialPlatform
@@ -537,7 +540,7 @@ export async function scrapeContentUrl(
             postURLs: [contentUrl],
             scrapeRelatedVideos: false,
             resultsPerPage: 1,
-            shouldDownloadCovers: true,
+            shouldDownloadCovers: false,
           })
         : platform === "youtube"
         ? await client.actor("streamers/youtube-scraper").call({
@@ -680,38 +683,49 @@ export async function scrapeContentUrl(
         item.videoMeta?.coverUrl,
         item.videoMeta?.originalCoverUrl,
         item.videoMeta?.dynamicCoverUrl,
+
         item.video?.cover,
         item.video?.originCover,
+
         item.covers,
         item.cover,
         item.originCover,
-        item.dynamicCover,
-        item.downloadedCovers,
-        item.downloadedCover
-      );
+        item.dynamicCover
+      ).filter((url) => !isApifyStorageUrl(url));
+
       return {
         contentUrl,
         ...verifiedContent,
         platform,
+
         caption: item.text ?? item.desc ?? "",
+
         thumbnailUrl: thumbnailCandidates[0],
         thumbnailCandidates,
+
         likes: int(item.diggCount ?? item.digg_count ?? item.stats?.diggCount),
+
         comments: int(
           item.commentCount ?? item.comment_count ?? item.stats?.commentCount
         ),
+
         saves: int(
           item.collectCount ?? item.collect_count ?? item.stats?.collectCount
         ),
+
         reposts: int(
           item.repostCount ?? item.repost_count ?? item.stats?.repostCount
         ),
+
         views: int(item.playCount ?? item.play_count ?? item.stats?.playCount),
+
         plays: int(item.playCount ?? item.play_count ?? item.stats?.playCount),
+
         duration:
           Number(
             item.videoMeta?.duration ?? item.video?.duration ?? item.duration
           ) || 0,
+
         shares: int(
           item.shareCount ?? item.share_count ?? item.stats?.shareCount
         ),
