@@ -86,8 +86,14 @@ async function enrichPostFromContentUrl(
       saves: metrics.saves,
       reposts: metrics.reposts,
       postedAt: fallback.postedAt,
-      postUrl: metrics.scrapedContentUrl || fallback.postUrl,
-      thumbnailUrl: metrics.thumbnailUrl ?? fallback.thumbnailUrl,
+      // Pertahankan identitas URL dari bulk scraper. URL bulk sudah
+      // membedakan feed (/p/) dan Reel (/reel/) dengan benar, sedangkan
+      // actor detail kadang hanya mengembalikan shortcode tanpa tipe media.
+      postUrl: fallback.postUrl,
+
+      // Thumbnail listing bulk paling sesuai dengan post yang dipilih.
+      // Gunakan thumbnail actor detail hanya sebagai fallback.
+      thumbnailUrl: fallback.thumbnailUrl ?? metrics.thumbnailUrl,
       locationName: fallback.locationName,
     };
   } catch (err) {
@@ -215,7 +221,18 @@ export async function scrapeInstagramPosts(
         postUrl:
           p.url ??
           (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ""),
-        thumbnailUrl: p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
+        thumbnailUrl: imageUrls(
+          p.displayUrl,
+          p.display_url,
+          p.thumbnailUrl,
+          p.thumbnail_url,
+          p.imageUrl,
+          p.image_url,
+          p.images,
+          p.childPosts,
+          p.carouselMedia,
+          p.carousel_media
+        )[0],
         locationName: p.locationName ?? p.location?.name,
       })
     );
@@ -458,13 +475,16 @@ function returnedContentUrl(
   const candidates =
     platform === "instagram"
       ? [
-          // Input/permalink and shortcode identify the post. A generic `url`
-          // from Instagram actors may point to the author profile or CDN.
+          // Input/permalink mempertahankan tipe media asli. Jangan membentuk
+          // URL final dari shortcode karena shortcode saja tidak menunjukkan
+          // apakah konten memakai path /p/ atau /reel/. Bentuk /p/ di bawah
+          // hanya dipakai untuk verifikasi contentId; URL yang disimpan tetap
+          // requested.normalizedUrl.
           text("inputUrl"),
           text("postUrl"),
           text("permalink"),
           text("shortcode", "code")
-            ? `https://instagram.com/reel/${text("shortcode", "code")}/`
+            ? `https://instagram.com/p/${text("shortcode", "code")}/`
             : null,
           text("url"),
         ]
@@ -597,7 +617,9 @@ export async function scrapeContentUrl(
     if (returnedUrl && !contentIdentityMatches(requested, returned))
       throw new Error("Scraper did not return the exact requested content");
     const verifiedContent = {
-      scrapedContentUrl: returned.normalizedUrl,
+      // URL input sudah memiliki tipe media yang benar (/p/ atau /reel/).
+      // Jangan menggantinya dengan URL tebakan dari payload actor detail.
+      scrapedContentUrl: requested.normalizedUrl,
       contentId: requested.contentId ?? returned.contentId ?? "",
     };
 

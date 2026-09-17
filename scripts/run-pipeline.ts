@@ -3,44 +3,34 @@ import "dotenv/config";
 import {
   processCreator,
   prisma,
-  SeedEntry,
+  type SeedEntry,
 } from "../lib/pipeline";
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY_MS = 5000;
-const CREATOR_LIMIT = 100;
 
-async function sleep(ms: number) {
-  return new Promise((resolve) =>
-    setTimeout(resolve, ms)
-  );
+/**
+ * Daftar akun yang akan di-scrape.
+ * Setiap akun wajib memiliki username dan platform.
+ */
+const creatorList: SeedEntry[] = [
+ 
+  { username: "clsmelody", platform: "instagram" },
+  { username: "yunishara36", platform: "instagram" }
+
+];
+
+async function sleep(
+  milliseconds: number
+): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
-function normalizePlatform(
-  value: string | null | undefined
-): "instagram" | "tiktok" | null {
-  const platform = String(value ?? "")
-    .trim()
-    .toLowerCase();
-
-  if (
-    platform === "instagram" ||
-    platform === "ig"
-  ) {
-    return "instagram";
-  }
-
-  if (
-    platform === "tiktok" ||
-    platform === "tik tok" ||
-    platform === "tt"
-  ) {
-    return "tiktok";
-  }
-
-  return null;
-}
-
+/**
+ * Membersihkan username.
+ */
 function normalizeUsername(
   value: string | null | undefined
 ): string {
@@ -51,74 +41,36 @@ function normalizeUsername(
 }
 
 /**
- * Mengambil maksimal 50 creator dari mst_creators
- * yang belum pernah berhasil di-scrape.
+ * Memvalidasi isi array sekaligus menghapus duplikat.
  */
-async function loadSeedFromDatabase(): Promise<
-  SeedEntry[]
-> {
-  console.log(
-    "[DATABASE] Mengambil maksimal 50 creator yang belum di-scrape..."
-  );
-
-  const creators =
-    await prisma.mst_creators.findMany({
-      where: {
-        last_scraped_at: null,
-
-        social_media: {
-          in: [
-            "instagram",
-            "Instagram",
-            "INSTAGRAM",
-            "ig",
-            "tiktok",
-            "TikTok",
-            "TIKTOK",
-            "tik tok",
-            "tt",
-          ],
-        },
-      },
-
-      select: {
-        id: true,
-        username: true,
-        social_media: true,
-      },
-
-      orderBy: {
-        id: "asc",
-      },
-
-      take: CREATOR_LIMIT,
-    });
-
+function loadSeedFromArray(): SeedEntry[] {
   const uniqueCreators = new Map<
     string,
     SeedEntry
   >();
 
-  for (const creator of creators) {
+  for (const creator of creatorList) {
     const username = normalizeUsername(
       creator.username
     );
 
-    const platform = normalizePlatform(
-      creator.social_media
-    );
+    const platform = creator.platform;
 
     if (!username) {
       console.warn(
-        `[SKIPPED DATABASE] Creator ID ${creator.id}: username kosong`
+        "[SKIPPED ARRAY] Ditemukan username kosong"
       );
 
       continue;
     }
 
-    if (!platform) {
+    if (
+      platform !== "instagram" &&
+      platform !== "tiktok"
+    ) {
       console.warn(
-        `[SKIPPED DATABASE] ${username}: platform tidak didukung (${creator.social_media})`
+        `[SKIPPED ARRAY] Platform tidak valid: ` +
+          `${username} (${platform})`
       );
 
       continue;
@@ -127,79 +79,131 @@ async function loadSeedFromDatabase(): Promise<
     const uniqueKey =
       `${platform}:${username}`;
 
-    if (!uniqueCreators.has(uniqueKey)) {
-      uniqueCreators.set(uniqueKey, {
-        username,
-        platform,
-      });
+    if (uniqueCreators.has(uniqueKey)) {
+      console.warn(
+        `[SKIPPED DUPLICATE] ` +
+          `${username} (${platform})`
+      );
+
+      continue;
     }
+
+    uniqueCreators.set(uniqueKey, {
+      username,
+      platform,
+    });
   }
 
   const seed = Array.from(
     uniqueCreators.values()
   );
 
+  const instagramCount = seed.filter(
+    (creator) =>
+      creator.platform === "instagram"
+  ).length;
+
+  const tiktokCount = seed.filter(
+    (creator) =>
+      creator.platform === "tiktok"
+  ).length;
+
   console.log(
-    `[DATABASE] ${creators.length} row ditemukan`
+    `[ARRAY] ${creatorList.length} akun dimasukkan`
   );
 
   console.log(
-    `[DATABASE] ${seed.length} creator valid akan diproses`
+    `[ARRAY] Instagram: ${instagramCount}`
+  );
+
+  console.log(
+    `[ARRAY] TikTok: ${tiktokCount}`
+  );
+
+  console.log(
+    `[ARRAY] ${seed.length} creator valid akan diproses`
   );
 
   return seed;
 }
 
+/**
+ * Memproses satu creator dengan retry.
+ */
 async function processWithRetry(
-  entry: SeedEntry,
-  retry: number = RETRY_COUNT
+  entry: SeedEntry
 ) {
-  try {
-    return await processCreator(entry);
-  } catch (err) {
-    console.error(
-      `[FAILED] ${entry.username} (${entry.platform})`,
-      err
-    );
+  let lastError: unknown;
 
-    if (retry <= 1) {
-      throw err;
+  for (
+    let attempt = 1;
+    attempt <= RETRY_COUNT;
+    attempt++
+  ) {
+    try {
+      console.log(
+        `[ATTEMPT] ${entry.username} ` +
+          `(${entry.platform}) ` +
+          `${attempt}/${RETRY_COUNT}`
+      );
+
+      return await processCreator(entry);
+    } catch (error) {
+      lastError = error;
+
+      console.error(
+        `[FAILED] ${entry.username} ` +
+          `(${entry.platform}) ` +
+          `percobaan ${attempt}/${RETRY_COUNT}`,
+        error
+      );
+
+      if (attempt < RETRY_COUNT) {
+        console.log(
+          `[RETRY] ${entry.username}, ` +
+            `menunggu ${RETRY_DELAY_MS / 1000} detik`
+        );
+
+        await sleep(RETRY_DELAY_MS);
+      }
     }
-
-    console.log(
-      `[RETRY] ${entry.username}, ` +
-      `sisa percobaan ${retry - 1}`
-    );
-
-    await sleep(RETRY_DELAY_MS);
-
-    return processWithRetry(
-      entry,
-      retry - 1
-    );
   }
+
+  throw lastError;
 }
 
-async function main() {
+async function main(): Promise<void> {
   const startedAt = Date.now();
 
-  const seed =
-    await loadSeedFromDatabase();
+  // Daftar creator berasal dari array,
+  // bukan dari query database.
+  const seed = loadSeedFromArray();
+
+  const instagramCount = seed.filter(
+    (creator) =>
+      creator.platform === "instagram"
+  ).length;
+
+  const tiktokCount = seed.filter(
+    (creator) =>
+      creator.platform === "tiktok"
+  ).length;
 
   console.log(`
 ================================
-PIPELINE DATABASE
+PIPELINE ARRAY MANUAL
 
 TOTAL CREATOR : ${seed.length}
+INSTAGRAM     : ${instagramCount}
+TIKTOK        : ${tiktokCount}
 RETRY         : ${RETRY_COUNT} kali
-LIMIT         : ${CREATOR_LIMIT}
-FILTER        : last_scraped_at IS NULL
+SUMBER        : Array manual
 ================================
 `);
 
   if (seed.length === 0) {
     console.log(
-      "[SELESAI] Tidak ada creator yang perlu di-scrape."
+      "[SELESAI] Tidak ada creator valid untuk diproses."
     );
 
     return;
@@ -233,7 +237,8 @@ PROGRESS ${processed}/${seed.length}
         results.success++;
 
         console.log(
-          `[SUCCESS] ${entry.username} (${entry.platform})`
+          `[SUCCESS] ${entry.username} ` +
+            `(${entry.platform})`
         );
       } else if (
         result?.status === "skipped"
@@ -241,22 +246,25 @@ PROGRESS ${processed}/${seed.length}
         results.skipped++;
 
         console.log(
-          `[SKIPPED] ${entry.username} (${entry.platform})`
+          `[SKIPPED] ${entry.username} ` +
+            `(${entry.platform})`
         );
       } else {
         results.unknown++;
 
         console.warn(
-          `[UNKNOWN STATUS] ${entry.username} (${entry.platform})`,
+          `[UNKNOWN STATUS] ${entry.username} ` +
+            `(${entry.platform})`,
           result
         );
       }
-    } catch (err) {
+    } catch (error) {
       results.error++;
 
       console.error(
-        `[FINAL ERROR] ${entry.username} (${entry.platform})`,
-        err
+        `[FINAL ERROR] ${entry.username} ` +
+          `(${entry.platform})`,
+        error
       );
     }
 
@@ -265,11 +273,10 @@ PROGRESS ${processed}/${seed.length}
     );
   }
 
-  const durationMs =
-    Date.now() - startedAt;
-
   const durationMinutes =
-    durationMs / 1000 / 60;
+    (Date.now() - startedAt) /
+    1000 /
+    60;
 
   console.log(`
 ================================
@@ -288,10 +295,10 @@ DURATION  : ${durationMinutes.toFixed(2)} menit
 }
 
 main()
-  .catch((err) => {
+  .catch((error) => {
     console.error(
       "[FATAL ERROR]",
-      err
+      error
     );
 
     process.exitCode = 1;

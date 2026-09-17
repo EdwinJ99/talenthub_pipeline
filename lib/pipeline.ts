@@ -150,7 +150,9 @@ export async function processCreator(
 ) {
   console.log(`\n--- ${entry.username} (${entry.platform}) ---`);
 
-  // 0. Tentukan rentang tanggal post yang mau diambil:
+  // 0. Cari creator lama untuk mempertahankan foto permanen jika upload
+  //    foto baru gagal. last_scraped_at TIDAK digunakan sebagai filter post:
+  //    setiap creator yang masuk job selalu mengambil ulang 20 post terbaru.
   const existingCreator = await prisma.mst_creators.findUnique({
     where: {
       username_social_media: {
@@ -161,22 +163,15 @@ export async function processCreator(
     select: {
       id: true,
       photo_url: true,
-      last_scraped_at: true,
     },
   });
-
-  let sinceDate: Date | undefined;
-
-  if (!preScrapedProfile && existingCreator?.last_scraped_at) {
-    sinceDate = existingCreator.last_scraped_at;
-  }
 
   // 1. Scrape PROFIL DULU AJA (murah — 1 request untuk IG, TikTok tetap gabung)
   const profile =
     preScrapedProfile ??
     (entry.platform === "instagram"
       ? (await scrapeInstagramProfileDetails([entry.username]))[0]
-      : (await scrapeTiktokProfiles([entry.username], sinceDate))[0]);
+      : (await scrapeTiktokProfiles([entry.username], undefined, POST_LIMIT))[0]);
 
   if (!profile || !profile.isValid) {
     console.log("  [SKIP] username tidak valid/tidak ditemukan");
@@ -202,17 +197,39 @@ export async function processCreator(
     return { status: "skipped", username: entry.username };
   }
 
-  // 1c. Baru sekarang narik postingan Instagram — HANYA untuk akun yang
-  //     sudah lolos validitas + minimal follower. Pakai sinceDate yang
-  //     sama supaya konsisten dengan filter di atas. TikTok sudah otomatis
-  //     punya posts dari step 1 (nggak perlu request tambahan).
+  // 1c. Selalu ambil ulang maksimal 20 postingan terbaru. Jangan memakai
+  //     last_scraped_at sebagai onlyPostsNewerThan karena background job ini
+  //     memakai pola full replacement seperti Quick Search.
   if (entry.platform === "instagram" && profile.posts.length === 0) {
     profile.posts = await scrapeInstagramPosts(
       profile.username,
-      sinceDate,
+      undefined,
       POST_LIMIT
     );
   }
+
+  // Validasi hasil baru SEBELUM menyentuh post lama di database. Apabila
+  // scraping gagal/kosong, lempar error agar mekanisme retry bekerja dan
+  // seluruh post lama tetap aman.
+  const validScrapedPosts = profile.posts
+    .filter((post) => {
+      if (!post.postUrl || !post.postedAt) return false;
+      return Number.isFinite(new Date(post.postedAt).getTime());
+    })
+    .sort(
+      (a, b) =>
+        new Date(b.postedAt).getTime() -
+        new Date(a.postedAt).getTime()
+    )
+    .slice(0, POST_LIMIT);
+
+  if (validScrapedPosts.length === 0) {
+    throw new Error(
+      `Tidak ada postingan valid untuk ${profile.username}; data lama tidak diubah`
+    );
+  }
+
+  profile.posts = validScrapedPosts;
 
   // 2. Cek lokasi Indonesia (Gemini)
   const locationCheck = await checkIndonesianLocation(
@@ -349,64 +366,59 @@ export async function processCreator(
     },
   });
 
-  // 6. Insert/update tiap post yang BARU di-scrape kali ini ke DB.
-  const latestScrapedPosts = profile.posts
-    .filter((p) => p.postUrl)
-    .slice(0, POST_LIMIT);
+  // 6. FULL REPLACEMENT POST.
+  //    Hapus seluruh post lama dan insert hasil scrape baru dalam SATU
+  //    transaksi. Jika satu insert gagal, delete ikut rollback sehingga
+  //    data lama tidak hilang setengah jalan.
+  const latestScrapedPosts = profile.posts.slice(0, POST_LIMIT);
 
-  let savedPosts = 0;
-  for (let i = 0; i < latestScrapedPosts.length; i++) {
-    const p = latestScrapedPosts[i];
-    try {
-      await prisma.dtl_creator_posts.upsert({
-        where: {
-          uq_creator_post: {
-            creator_id: creator.id,
-            posted_at: new Date(p.postedAt),
-            caption: p.caption,
-          },
-        },
-        update: {
-          likes: p.likes ?? 0,
-          comments: p.comments ?? 0,
-          views: p.views ?? 0,
-          shares: p.shares ?? 0,
-          saves: p.saves ?? 0,
-          reposts: p.reposts ?? 0,
-          post_url: p.postUrl,
-          thumbnail_url: p.thumbnailUrl,
-
-          is_endorse:
-            endorseResults.find((e) => e.index === i)?.isEndorse ?? false,
-        },
-        create: {
-          creator_id: creator.id,
-          caption: p.caption,
-          likes: p.likes ?? 0,
-          comments: p.comments ?? 0,
-          views: p.views ?? 0,
-          shares: p.shares ?? 0,
-          saves: p.saves ?? 0,
-          reposts: p.reposts ?? 0,
-          post_url: p.postUrl,
-          thumbnail_url: p.thumbnailUrl,
-          is_endorse:
-            endorseResults.find((e) => e.index === i)?.isEndorse ?? false,
-
-          posted_at: new Date(p.postedAt),
-        },
+  const replacementResult = await prisma.$transaction(
+    async (tx) => {
+      const deleted = await tx.dtl_creator_posts.deleteMany({
+        where: { creator_id: creator.id },
       });
-      savedPosts++;
-    } catch (err) {
-      console.error(`  Gagal simpan post index ${i}:`, err);
-    }
-  }
-  console.log(`[OK] ${savedPosts}/${latestScrapedPosts.length} post tersimpan`);
 
-  // 7. AMBIL MAX_METRICS_SAMPLE POST TERAKHIR dari DB (bukan cuma yang baru
-  //    di-scrape kali ini). Ini kuncinya: post lama dari refresh-refresh
-  //    sebelumnya ikut kehitung, jadi ER tidak lagi bias gara-gara jumlah
-  //    post yang berhasil di-scrape berbeda-beda tiap kali refresh.
+      for (let i = 0; i < latestScrapedPosts.length; i++) {
+        const post = latestScrapedPosts[i];
+
+        await tx.dtl_creator_posts.create({
+          data: {
+            creator_id: creator.id,
+            caption: post.caption,
+            likes: post.likes ?? 0,
+            comments: post.comments ?? 0,
+            views: post.views ?? 0,
+            shares: post.shares ?? 0,
+            saves: post.saves ?? 0,
+            reposts: post.reposts ?? 0,
+            post_url: post.postUrl,
+            thumbnail_url: post.thumbnailUrl ?? null,
+            is_endorse:
+              endorseResults.find((result) => result.index === i)
+                ?.isEndorse ?? false,
+            posted_at: new Date(post.postedAt),
+          },
+        });
+      }
+
+      return {
+        deleted: deleted.count,
+        inserted: latestScrapedPosts.length,
+      };
+    },
+    {
+      maxWait: 10_000,
+      timeout: 30_000,
+    }
+  );
+
+  console.log(
+    `[REPLACE] ${replacementResult.deleted} post lama dihapus; ` +
+      `${replacementResult.inserted} post terbaru disimpan`
+  );
+
+  // 7. Ambil kembali maksimal 20 post hasil replacement untuk menghitung
+  //    seluruh metrics dengan data terbaru yang konsisten.
   const latestPosts = await prisma.dtl_creator_posts.findMany({
     where: { creator_id: creator.id },
     orderBy: { posted_at: "desc" },
