@@ -8,17 +8,26 @@ import {
 
 const RETRY_COUNT = 3;
 const RETRY_DELAY_MS = 5000;
+const REFRESH_AFTER_DAYS = 7;
 
 /**
- * Daftar akun yang akan di-scrape.
- * Setiap akun wajib memiliki username dan platform.
+ * null = proses semua creator yang memenuhi syarat.
+ * Isi angka, misalnya 50, untuk membatasi satu kali eksekusi.
  */
-const creatorList: SeedEntry[] = [
- 
-  { username: "clsmelody", platform: "instagram" },
-  { username: "yunishara36", platform: "instagram" }
+const CREATOR_LIMIT: number | null = null;
 
-];
+class GlobalPipelineError extends Error {
+  readonly originalError: unknown;
+
+  constructor(
+    message: string,
+    originalError: unknown
+  ) {
+    super(message);
+    this.name = "GlobalPipelineError";
+    this.originalError = originalError;
+  }
+}
 
 async function sleep(
   milliseconds: number
@@ -28,9 +37,6 @@ async function sleep(
   });
 }
 
-/**
- * Membersihkan username.
- */
 function normalizeUsername(
   value: string | null | undefined
 ): string {
@@ -40,37 +46,277 @@ function normalizeUsername(
     .toLowerCase();
 }
 
+function normalizePlatform(
+  value: string | null | undefined
+): "instagram" | "tiktok" | null {
+  const platform = String(value ?? "")
+    .trim()
+    .toLowerCase();
+
+  if (
+    platform === "instagram" ||
+    platform === "ig"
+  ) {
+    return "instagram";
+  }
+
+  if (
+    platform === "tiktok" ||
+    platform === "tik tok" ||
+    platform === "tt"
+  ) {
+    return "tiktok";
+  }
+
+  return null;
+}
+
 /**
- * Memvalidasi isi array sekaligus menghapus duplikat.
+ * Menggabungkan pesan error dan cause agar error jaringan
+ * yang dibungkus TypeError tetap bisa dikenali.
  */
-function loadSeedFromArray(): SeedEntry[] {
+function getErrorMessage(
+  error: unknown
+): string {
+  const messages: string[] = [];
+  const visited = new Set<unknown>();
+
+  let current: unknown = error;
+
+  for (
+    let depth = 0;
+    depth < 5 && current;
+    depth++
+  ) {
+    if (visited.has(current)) {
+      break;
+    }
+
+    visited.add(current);
+
+    if (current instanceof Error) {
+      messages.push(
+        current.name,
+        current.message
+      );
+
+      const errorWithCause =
+        current as Error & {
+          cause?: unknown;
+          code?: unknown;
+        };
+
+      if (errorWithCause.code) {
+        messages.push(
+          String(errorWithCause.code)
+        );
+      }
+
+      current =
+        errorWithCause.cause;
+    } else if (
+      typeof current === "object"
+    ) {
+      const objectError =
+        current as {
+          message?: unknown;
+          code?: unknown;
+          cause?: unknown;
+        };
+
+      if (objectError.message) {
+        messages.push(
+          String(objectError.message)
+        );
+      }
+
+      if (objectError.code) {
+        messages.push(
+          String(objectError.code)
+        );
+      }
+
+      current =
+        objectError.cause;
+    } else {
+      messages.push(
+        String(current)
+      );
+
+      break;
+    }
+  }
+
+  return messages
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * Error global bukan kesalahan satu creator.
+ *
+ * Setelah tiga percobaan pada creator yang sedang berjalan,
+ * pipeline dihentikan supaya tidak menghabiskan seluruh
+ * antrean ketika internet/database mati atau seluruh token
+ * Apify sudah tidak tersedia.
+ */
+function isGlobalFailure(
+  error: unknown
+): boolean {
+  const message =
+    getErrorMessage(error);
+
+  const globalErrorKeywords = [
+    // Internet, DNS, dan koneksi keluar
+    "fetch failed",
+    "eai_again",
+    "enotfound",
+    "econnrefused",
+    "econnreset",
+    "enetunreach",
+    "etimedout",
+    "network is unreachable",
+    "socket hang up",
+
+    // Database Neon / Prisma
+    "can't reach database server",
+    "p1001",
+    "connection terminated",
+    "connection timeout",
+    "server has closed the connection",
+
+    // Seluruh token Apify tidak tersedia
+    "no active apify token",
+    "no available apify token",
+    "no apify token available",
+    "no usable apify token",
+    "all apify tokens",
+    "all tokens are exhausted",
+    "token pool exhausted",
+    "apify token pool exhausted",
+    "semua token apify",
+    "quota exceeded for all",
+    "monthly usage hard limit",
+    "usage limit exceeded",
+    "authentication token is not valid",
+    "insufficient permissions for the key-value store",
+  ];
+
+  return globalErrorKeywords.some(
+    (keyword) =>
+      message.includes(keyword)
+  );
+}
+
+/**
+ * Mengambil creator yang:
+ * 1. Belum pernah di-scrape (last_scraped_at NULL), atau
+ * 2. Terakhir di-scrape minimal tujuh hari yang lalu.
+ *
+ * NULL diprioritaskan, kemudian tanggal scrape paling lama.
+ */
+async function loadSeedFromDatabase(): Promise<
+  SeedEntry[]
+> {
+  const refreshCutoff = new Date(
+    Date.now() -
+      REFRESH_AFTER_DAYS *
+        24 *
+        60 *
+        60 *
+        1000
+  );
+
+  console.log(
+    "[DATABASE] Mengambil creator yang belum di-scrape " +
+      `atau sudah >= ${REFRESH_AFTER_DAYS} hari...`
+  );
+
+  console.log(
+    `[DATABASE] Batas refresh: ${refreshCutoff.toISOString()}`
+  );
+
+  const creators =
+    await prisma.mst_creators.findMany({
+      where: {
+        OR: [
+          {
+            last_scraped_at: null,
+          },
+          {
+            last_scraped_at: {
+              lte: refreshCutoff,
+            },
+          },
+        ],
+
+        social_media: {
+          in: [
+            "instagram",
+            "Instagram",
+            "INSTAGRAM",
+            "ig",
+            "tiktok",
+            "TikTok",
+            "TIKTOK",
+            "tik tok",
+            "tt",
+          ],
+        },
+      },
+
+      select: {
+        id: true,
+        username: true,
+        social_media: true,
+        last_scraped_at: true,
+      },
+
+      orderBy: [
+        {
+          last_scraped_at: {
+            sort: "asc",
+            nulls: "first",
+          },
+        },
+        {
+          id: "asc",
+        },
+      ],
+
+      ...(CREATOR_LIMIT !== null
+        ? {
+            take: CREATOR_LIMIT,
+          }
+        : {}),
+    });
+
   const uniqueCreators = new Map<
     string,
     SeedEntry
   >();
 
-  for (const creator of creatorList) {
+  for (const creator of creators) {
     const username = normalizeUsername(
       creator.username
     );
 
-    const platform = creator.platform;
+    const platform = normalizePlatform(
+      creator.social_media
+    );
 
     if (!username) {
       console.warn(
-        "[SKIPPED ARRAY] Ditemukan username kosong"
+        `[SKIPPED DATABASE] ID ${creator.id}: username kosong`
       );
 
       continue;
     }
 
-    if (
-      platform !== "instagram" &&
-      platform !== "tiktok"
-    ) {
+    if (!platform) {
       console.warn(
-        `[SKIPPED ARRAY] Platform tidak valid: ` +
-          `${username} (${platform})`
+        `[SKIPPED DATABASE] ID ${creator.id}: ` +
+          `platform tidak didukung (${creator.social_media})`
       );
 
       continue;
@@ -81,8 +327,7 @@ function loadSeedFromArray(): SeedEntry[] {
 
     if (uniqueCreators.has(uniqueKey)) {
       console.warn(
-        `[SKIPPED DUPLICATE] ` +
-          `${username} (${platform})`
+        `[SKIPPED DUPLICATE] ${username} (${platform})`
       );
 
       continue;
@@ -98,42 +343,32 @@ function loadSeedFromArray(): SeedEntry[] {
     uniqueCreators.values()
   );
 
-  const instagramCount = seed.filter(
-    (creator) =>
-      creator.platform === "instagram"
-  ).length;
-
-  const tiktokCount = seed.filter(
-    (creator) =>
-      creator.platform === "tiktok"
-  ).length;
-
   console.log(
-    `[ARRAY] ${creatorList.length} akun dimasukkan`
+    `[DATABASE] ${creators.length} row ditemukan`
   );
 
   console.log(
-    `[ARRAY] Instagram: ${instagramCount}`
-  );
-
-  console.log(
-    `[ARRAY] TikTok: ${tiktokCount}`
-  );
-
-  console.log(
-    `[ARRAY] ${seed.length} creator valid akan diproses`
+    `[DATABASE] ${seed.length} creator valid akan diproses`
   );
 
   return seed;
 }
 
 /**
- * Memproses satu creator dengan retry.
+ * Memproses satu creator maksimal tiga kali.
+ *
+ * Error lokal setelah tiga kali dilempar ke loop utama
+ * agar dicatat lalu lanjut ke creator berikutnya.
+ *
+ * Error global juga dicoba maksimal tiga kali. Jika tetap
+ * gagal, error dibungkus sebagai GlobalPipelineError agar
+ * seluruh pipeline dihentikan.
  */
 async function processWithRetry(
   entry: SeedEntry
 ) {
   let lastError: unknown;
+  let lastFailureWasGlobal = false;
 
   for (
     let attempt = 1;
@@ -150,6 +385,8 @@ async function processWithRetry(
       return await processCreator(entry);
     } catch (error) {
       lastError = error;
+      lastFailureWasGlobal =
+        isGlobalFailure(error);
 
       console.error(
         `[FAILED] ${entry.username} ` +
@@ -158,15 +395,30 @@ async function processWithRetry(
         error
       );
 
+      if (lastFailureWasGlobal) {
+        console.error(
+          "  [GLOBAL] Gangguan koneksi/token terdeteksi."
+        );
+      }
+
       if (attempt < RETRY_COUNT) {
         console.log(
           `[RETRY] ${entry.username}, ` +
             `menunggu ${RETRY_DELAY_MS / 1000} detik`
         );
 
-        await sleep(RETRY_DELAY_MS);
+        await sleep(
+          RETRY_DELAY_MS
+        );
       }
     }
+  }
+
+  if (lastFailureWasGlobal) {
+    throw new GlobalPipelineError(
+      "Gangguan global tetap terjadi setelah tiga percobaan.",
+      lastError
+    );
   }
 
   throw lastError;
@@ -175,9 +427,8 @@ async function processWithRetry(
 async function main(): Promise<void> {
   const startedAt = Date.now();
 
-  // Daftar creator berasal dari array,
-  // bukan dari query database.
-  const seed = loadSeedFromArray();
+  const seed =
+    await loadSeedFromDatabase();
 
   const instagramCount = seed.filter(
     (creator) =>
@@ -191,19 +442,20 @@ async function main(): Promise<void> {
 
   console.log(`
 ================================
-PIPELINE ARRAY MANUAL
+PIPELINE DATABASE
 
 TOTAL CREATOR : ${seed.length}
 INSTAGRAM     : ${instagramCount}
 TIKTOK        : ${tiktokCount}
 RETRY         : ${RETRY_COUNT} kali
-SUMBER        : Array manual
+LIMIT         : ${CREATOR_LIMIT ?? "SEMUA"}
+FILTER        : NULL atau terakhir scrape >= ${REFRESH_AFTER_DAYS} hari
 ================================
 `);
 
   if (seed.length === 0) {
     console.log(
-      "[SELESAI] Tidak ada creator valid untuk diproses."
+      "[SELESAI] Tidak ada creator yang perlu di-scrape."
     );
 
     return;
@@ -259,6 +511,30 @@ PROGRESS ${processed}/${seed.length}
         );
       }
     } catch (error) {
+      if (
+        error instanceof GlobalPipelineError
+      ) {
+        console.error(`
+================================
+PIPELINE DIHENTIKAN
+
+PENYEBAB : Gangguan global
+CREATOR  : ${entry.username} (${entry.platform})
+PROGRESS : ${processed}/${seed.length}
+
+Creator yang gagal dan belum diproses tetap
+berada dalam antrean untuk jadwal berikutnya.
+================================
+`);
+
+        console.error(
+          "[GLOBAL ERROR DETAIL]",
+          error.originalError
+        );
+
+        throw error;
+      }
+
       results.error++;
 
       console.error(
