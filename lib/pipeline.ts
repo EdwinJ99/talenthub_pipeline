@@ -19,6 +19,8 @@ import {
   persistFirstProfileImage,
 } from "./profile-image";
 
+import { persistPostThumbnails } from "./post-thumbnail";
+
 const prisma = new PrismaClient();
 
 export interface SeedEntry {
@@ -370,7 +372,47 @@ export async function processCreator(
   //    Hapus seluruh post lama dan insert hasil scrape baru dalam SATU
   //    transaksi. Jika satu insert gagal, delete ikut rollback sehingga
   //    data lama tidak hilang setengah jalan.
-  const latestScrapedPosts = profile.posts.slice(0, POST_LIMIT);
+const previousPosts =
+  await prisma.dtl_creator_posts.findMany({
+    where: {
+      creator_id: creator.id,
+    },
+    select: {
+      post_url: true,
+      thumbnail_url: true,
+    },
+  });
+
+const existingThumbnailByPostUrl = new Map(
+  previousPosts
+    .filter(
+      (
+        post
+      ): post is {
+        post_url: string;
+        thumbnail_url: string;
+      } =>
+        Boolean(
+          post.post_url &&
+          post.thumbnail_url
+        )
+    )
+    .map((post) => [
+      post.post_url,
+      post.thumbnail_url,
+    ])
+);
+
+const latestScrapedPosts =
+  await persistPostThumbnails(
+    profile.posts.slice(0, POST_LIMIT),
+    {
+      username: profile.username,
+      platform: profile.socialMedia,
+      existingThumbnailByPostUrl,
+      concurrency: 3,
+    }
+  );
 
   const replacementResult = await prisma.$transaction(
     async (tx) => {
