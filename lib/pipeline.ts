@@ -410,7 +410,7 @@ const latestScrapedPosts =
       username: profile.username,
       platform: profile.socialMedia,
       existingThumbnailByPostUrl,
-      concurrency: 3,
+      concurrency: 1,
     }
   );
 
