@@ -3,23 +3,30 @@ import type { RawPost } from "./apify";
 
 // ============================================================================
 // ROTASI MULTI-API-KEY GEMINI
-// ============================================================================
 
-const GEMINI_API_KEYS = (process.env.GEMINI_API_KEYS ?? "")
-  .split(",")
-  .map((k) => k.trim())
-  .filter(Boolean);
+function getGeminiApiKeys(): string[] {
+  // GEMINI_API_KEYS is the preferred multi-key setting. The two fallbacks keep
+  // existing local installations compatible while they migrate their env name.
+  const configuredKeys = process.env.GEMINI_API_KEYS
+    ?? process.env.GEMINI_API_KEY
+    ?? process.env["GEMINI-API_KEY"]
+    ?? "";
 
-if (GEMINI_API_KEYS.length === 0) {
-  throw new Error(
-    "GEMINI_API_KEYS tidak ditemukan di .env (pisahkan dengan koma kalau lebih dari 1)"
-  );
+  return configuredKeys
+    .split(",")
+    .map((key) => key.trim())
+    .filter(Boolean);
 }
 
 let currentKeyIndex = 0;
 
 function getGenAI(): GoogleGenerativeAI {
-  return new GoogleGenerativeAI(GEMINI_API_KEYS[currentKeyIndex]);
+  const keys = getGeminiApiKeys();
+  if (keys.length === 0) {
+    throw new Error("Gemini is not configured. Add GEMINI_API_KEYS to the deployment environment variables.");
+  }
+  currentKeyIndex %= keys.length;
+  return new GoogleGenerativeAI(keys[currentKeyIndex]);
 }
 
 function isRateLimitOrQuotaError(err: any): boolean {
@@ -57,9 +64,7 @@ async function callModel(
     .trim();
 }
 
-// Coba semua model di MODEL_CANDIDATES pakai API KEY YANG SEDANG AKTIF.
-// Dipangkas jadi CUMA 1x percobaan per model (tanpa retry-tunggu), supaya
-// begitu kena 429, langsung pindah/gagal cepat — tidak buang waktu nunggu
+// Coba semua model di MODEL_CANDIDATES pakai API KEY YANG SEDANG AKTIF
 // 10-15 detik per percobaan kalau memang kuotanya lagi habis semua.
 async function tryAllModelsWithCurrentKey(
   prompt: string,
@@ -86,6 +91,11 @@ async function generateWithRetry(
   prompt: string,
   options?: GenerateOptions
 ): Promise<string> {
+  const apiKeys = getGeminiApiKeys();
+  if (apiKeys.length === 0) {
+    throw new Error("Gemini is not configured. Add GEMINI_API_KEYS to the deployment environment variables.");
+  }
+  currentKeyIndex %= apiKeys.length;
   const startKeyIndex = currentKeyIndex;
   let attempts = 0;
   let lastError: any;
@@ -93,7 +103,7 @@ async function generateWithRetry(
   // Lapis 1: coba semua model dengan key yang sedang aktif.
   // Kalau SEMUA model gagal karena rate-limit/quota (bukan error lain),
   // rotasi ke API key berikutnya dan ulangi dari model pertama lagi.
-  while (attempts < GEMINI_API_KEYS.length) {
+  while (attempts < apiKeys.length) {
     try {
       return await tryAllModelsWithCurrentKey(prompt, options);
     } catch (err: any) {
@@ -108,7 +118,7 @@ async function generateWithRetry(
       console.warn(
         `  [GEMINI] Key index ${currentKeyIndex} kena limit. Rotasi ke key berikutnya...`
       );
-      currentKeyIndex = (currentKeyIndex + 1) % GEMINI_API_KEYS.length;
+      currentKeyIndex = (currentKeyIndex + 1) % apiKeys.length;
       attempts++;
 
       // Kalau sudah muter balik ke key awal, berarti semua key sudah dicoba.
@@ -312,7 +322,13 @@ atau { "gender": "unknown" }
 }
 
 export interface LocationCheck {
+  status:
+    | "indonesian"
+    | "uncertain"
+    | "not_indonesian";
+
   isIndonesian: boolean;
+  confidence: number;
   cityGuess: string | null;
 }
 
@@ -320,34 +336,175 @@ export async function checkIndonesianLocation(
   bio: string,
   posts: RawPost[]
 ): Promise<LocationCheck> {
+  const captions = posts
+    .slice(0, 10)
+    .map((post, index) => {
+      const caption = String(
+        post.caption ?? ""
+      ).trim();
+
+      return caption
+        ? `Caption ${index + 1}:\n${caption}`
+        : "";
+    })
+    .filter(Boolean)
+    .join("\n\n---\n\n");
+
   const prompt = `
-Kamu sistem deteksi apakah sebuah akun social media adalah akun asal Indonesia.
+Kamu adalah sistem klasifikasi untuk menentukan apakah pemilik akun media sosial berbasis di Indonesia.
 
-Bio: ${bio}
-Contoh caption postingan:
-${posts
-  .slice(0, 5)
-  .map((p) => p.caption)
-  .join("\n---\n")}
+PENTING:
+- Jangan menentukan negara asal berdasarkan lokasi postingan.
+- Creator Indonesia dapat sedang traveling, bekerja, belajar, atau membuat konten di luar negeri.
+- Kota, negara, hotel, bandara, dan tempat wisata di caption bukan bukti domisili.
+- Caption berbahasa Inggris tidak otomatis berarti akun bukan Indonesia.
+- cityGuess hanya boleh diambil dari informasi domisili yang jelas di BIO.
+- Jangan mengambil cityGuess dari lokasi perjalanan atau caption.
 
-Berdasarkan bahasa yang dipakai (Bahasa Indonesia/daerah), lokasi yang disebut, konteks budaya,
-tentukan apakah akun ini KEMUNGKINAN BESAR berbasis di Indonesia.
+Gunakan indikator berikut:
+1. Penggunaan Bahasa Indonesia atau bahasa daerah.
+2. Konteks budaya, merek, organisasi, acara, atau masyarakat Indonesia.
+3. Nomor kontak Indonesia dengan kode +62.
+4. Agensi, manajemen, perusahaan, atau email bisnis Indonesia.
+5. Identitas atau domisili Indonesia pada bio.
+6. Aktivitas atau mayoritas audiens yang berhubungan dengan Indonesia.
 
-Balas HANYA JSON, tanpa markdown:
-{ "isIndonesian": true, "cityGuess": "Jakarta" }
-atau
-{ "isIndonesian": false, "cityGuess": null }
+Klasifikasikan menjadi salah satu:
 
-Kalau kota tidak bisa ditebak dari bio/caption, cityGuess harus null meskipun isIndonesian true.
+1. "indonesian"
+   Gunakan jika terdapat bukti yang cukup bahwa creator berbasis di Indonesia.
+
+2. "uncertain"
+   Gunakan jika informasi tidak cukup, bio kosong, caption terlalu sedikit,
+   caption mayoritas bahasa Inggris, atau asal akun tidak dapat dipastikan.
+
+3. "not_indonesian"
+   Gunakan HANYA jika terdapat bukti kuat bahwa creator berbasis di negara lain
+   dan tidak memiliki hubungan yang berarti dengan Indonesia.
+
+Aturan confidence:
+- Nilai antara 0 sampai 100.
+- 80–100 untuk keputusan yang memiliki bukti kuat.
+- 50–79 untuk indikasi cukup tetapi belum sepenuhnya pasti.
+- Di bawah 50 jika informasinya tidak mencukupi.
+
+BIO:
+${String(bio ?? "").trim() || "(bio kosong)"}
+
+CONTOH CAPTION:
+${captions || "(caption tidak tersedia)"}
+
+Balas HANYA JSON valid tanpa markdown:
+
+{
+  "status": "indonesian",
+  "confidence": 90,
+  "cityGuess": "Jakarta"
+}
+
+Contoh jika ragu:
+
+{
+  "status": "uncertain",
+  "confidence": 40,
+  "cityGuess": null
+}
+
+Contoh jika yakin bukan Indonesia:
+
+{
+  "status": "not_indonesian",
+  "confidence": 90,
+  "cityGuess": null
+}
 `;
 
-  const text = await generateWithRetry(prompt);
   try {
-    return JSON.parse(text);
-  } catch {
-    return { isIndonesian: false, cityGuess: null };
+    const text = await generateWithRetry(
+      prompt
+    );
+
+    const cleanedText = String(text ?? "")
+      .trim()
+      .replace(/^```json\s*/i, "")
+      .replace(/^```\s*/i, "")
+      .replace(/\s*```$/i, "")
+      .trim();
+
+    const parsed = JSON.parse(cleanedText);
+
+    const validStatuses = [
+      "indonesian",
+      "uncertain",
+      "not_indonesian",
+    ] as const;
+
+    const status =
+      validStatuses.includes(parsed.status)
+        ? parsed.status
+        : "uncertain";
+
+    const rawConfidence = Number(
+      parsed.confidence
+    );
+
+    const confidence = Number.isFinite(
+      rawConfidence
+    )
+      ? Math.max(
+          0,
+          Math.min(100, rawConfidence)
+        )
+      : 0;
+
+    /*
+     * Keputusan "bukan Indonesia" hanya diterima
+     * jika confidence minimal 80.
+     *
+     * Jika Gemini mengatakan bukan Indonesia tetapi
+     * keyakinannya rendah, ubah menjadi uncertain.
+     */
+    const finalStatus =
+      status === "not_indonesian" &&
+      confidence < 80
+        ? "uncertain"
+        : status;
+
+    const cityGuess =
+      finalStatus === "indonesian" &&
+      typeof parsed.cityGuess === "string" &&
+      parsed.cityGuess.trim()
+        ? parsed.cityGuess.trim()
+        : null;
+
+    return {
+      status: finalStatus,
+
+      isIndonesian:
+        finalStatus === "indonesian",
+
+      confidence,
+
+      cityGuess,
+    };
+  } catch (error) {
+    console.error(
+      "[LOCATION CHECK] Gagal memeriksa lokasi:",
+      error
+    );
+
+    /*
+     * Jika Gemini error, jangan buang akun.
+     */
+    return {
+      status: "uncertain",
+      isIndonesian: false,
+      confidence: 0,
+      cityGuess: null,
+    };
   }
 }
+
 
 // ============================================================================
 // >>> BAGIAN BARU — FLOW 2 <<<
