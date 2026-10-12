@@ -217,16 +217,30 @@ export async function scrapeInstagramPosts(
           p.commentsCount ?? p.commentCount ?? p.comments
         ),
         views: normalizeCount(
-          p.videoViewCount ?? p.videoPlayCount ?? p.viewsCount ?? p.views
+          p.videoViewCount ??
+            p.videoPlayCount ??
+            p.viewsCount ??
+            p.views
         ),
-        shares: normalizeCount(p.shareCount ?? p.sharesCount ?? p.shares),
-        saves: normalizeCount(p.saveCount ?? p.savesCount ?? p.saves),
-        reposts: normalizeCount(p.repostCount ?? p.repostsCount ?? p.reposts),
-        postedAt: normalizePostedAt(p.timestamp ?? p.takenAtIso ?? p.takenAt),
+        shares: normalizeCount(
+          p.shareCount ?? p.sharesCount ?? p.shares
+        ),
+        saves: normalizeCount(
+          p.saveCount ?? p.savesCount ?? p.saves
+        ),
+        reposts: normalizeCount(
+          p.repostCount ?? p.repostsCount ?? p.reposts
+        ),
+        postedAt: normalizePostedAt(
+          p.timestamp ?? p.takenAtIso ?? p.takenAt
+        ),
         postUrl:
           p.url ??
-          (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ""),
-        thumbnailUrl: p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
+          (p.shortCode
+            ? `https://www.instagram.com/p/${p.shortCode}/`
+            : ""),
+        thumbnailUrl:
+          p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
         locationName: p.locationName ?? p.location?.name,
       })
     );
@@ -239,9 +253,7 @@ export async function scrapeInstagramPosts(
 
       if (!post.postUrl || !Number.isFinite(postedTime)) {
         console.warn(
-          `  [SKIP POST] URL/tanggal tidak valid: ${
-            post.postUrl || "tanpa URL"
-          }`
+          `  [SKIP POST] URL/tanggal tidak valid: ${post.postUrl || "tanpa URL"}`
         );
         continue;
       }
@@ -256,7 +268,8 @@ export async function scrapeInstagramPosts(
     return Array.from(uniquePosts.values())
       .sort(
         (a, b) =>
-          new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime()
+          new Date(b.postedAt).getTime() -
+          new Date(a.postedAt).getTime()
       )
       .slice(0, limit);
   });
@@ -307,7 +320,9 @@ export async function scrapeTiktokProfiles(
     enrichPosts?: boolean;
   } = {}
 ): Promise<RawProfile[]> {
-  const shouldEnrich = options.enrichPosts !== false;
+
+  const shouldEnrich =
+    options.enrichPosts !== false;
 
   if (usernames.length === 0) return [];
 

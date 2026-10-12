@@ -664,87 +664,63 @@ export async function processCreator(
 
   // Incremental insert: post lama tidak pernah dihapus.
 
-  const insertResult = await prisma.$transaction(
+  await prisma.$transaction(
     async (tx) => {
-      let inserted = 0;
-
-      let skipped = 0;
-
-      for (let index = 0; index < profile.posts.length; index++) {
-        const post = profile.posts[index];
-
-        const duplicate = await tx.dtl_creator_posts.findFirst({
-          where: {
-            creator_id: creator.id,
-
-            post_url: post.postUrl,
+      await tx.dtl_creator_posts.updateMany({
+        where: {
+          creator_id: creator.id,
+          id: {
+            notIn: topContentIds,
           },
+        },
+        data: {
+          is_top_content: false,
+          thumbnail_url: null,
+          thumbnail_data: null,
+          thumbnail_mime_type: null,
+          thumbnail_updated_at: null,
+        },
+      });
 
-          select: { id: true },
-        });
+      for (const post of topFiveDatabasePosts) {
+        const downloaded = downloadedThumbnailByPostUrl.get(
+          post.post_url ?? ""
+        );
 
-        if (duplicate) {
-          skipped++;
-
-          continue;
+        if (downloaded) {
+          await tx.dtl_creator_posts.update({
+            where: {
+              id: post.id,
+            },
+            data: {
+              is_top_content: true,
+              thumbnail_url: null,
+              thumbnail_data: downloaded.data,
+              thumbnail_mime_type: downloaded.mimeType,
+              thumbnail_updated_at: new Date(),
+            },
+          });
+        } else {
+          /*
+           * Download gagal:
+           * pertahankan thumbnail_data lama jika sudah ada.
+           */
+          await tx.dtl_creator_posts.update({
+            where: {
+              id: post.id,
+            },
+            data: {
+              is_top_content: true,
+              thumbnail_url: null,
+            },
+          });
         }
-
-        await tx.dtl_creator_posts.create({
-          data: {
-            creator_id: creator.id,
-
-            caption: post.caption,
-
-            likes: safeMetric(post.likes),
-
-            comments: safeMetric(post.comments),
-
-            views: safeMetric(post.views),
-
-            shares: safeMetric(post.shares),
-
-            saves: safeMetric(post.saves),
-
-            reposts: safeMetric(post.reposts),
-
-            post_url: post.postUrl,
-
-            posted_at: new Date(post.postedAt),
-
-            scraped_at: new Date(),
-
-            is_endorse:
-              endorseResults.find((result) => result.index === index)
-                ?.isEndorse ?? false,
-
-            is_top_content: false,
-
-            thumbnail_url: null,
-
-            thumbnail_data: null,
-
-            thumbnail_mime_type: null,
-
-            thumbnail_updated_at: null,
-          },
-        });
-
-        inserted++;
       }
-
-      return { inserted, skipped };
     },
-
     {
-      maxWait: 10_000,
-
-      timeout: 30_000,
+      maxWait: 15_000,
+      timeout: 60_000,
     }
-  );
-
-  console.log(
-    `[INCREMENTAL] ${insertResult.inserted} post disimpan; ` +
-      `${insertResult.skipped} duplicate dilewati`
   );
 
   /*
