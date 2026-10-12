@@ -1,4 +1,9 @@
 import sharp from "sharp";
+import { setDefaultResultOrder } from "node:dns";
+
+// VPS/Docker kadang menerima alamat IPv6 CDN yang tidak memiliki rute stabil.
+// Dahulukan IPv4, tetapi tetap izinkan Node memakai IPv6 sebagai fallback.
+setDefaultResultOrder("ipv4first");
 
 export type ImagePlatform = "instagram" | "tiktok";
 export type ImageKind = "profile" | "thumbnail";
@@ -25,10 +30,27 @@ type DownloadOptions = {
 };
 
 const DOWNLOAD_TIMEOUT_MS = 60_000;
-const RETRY_DELAY_MS = 3_000;
+const RETRY_DELAYS_MS = [5_000, 15_000] as const;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function retryDelay(attempt: number): number {
+  const baseDelay =
+    RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)] ??
+    15_000;
+  const jitter = Math.floor(Math.random() * 3_000);
+
+  return baseDelay + jitter;
+}
+
+function sourceHost(value: string): string {
+  try {
+    return new URL(value).hostname;
+  } catch {
+    return "invalid-url";
+  }
 }
 
 function errorMessage(error: unknown): string {
@@ -185,10 +207,14 @@ export async function downloadImageWithRetry(
         lastError = error;
         console.warn(
           `[MEDIA] ${options.label} gagal ${attempt}/${attempts}: ` +
-            errorMessage(error)
+            `${errorMessage(error)} | host=${sourceHost(candidate)}`
         );
         if (attempt < attempts) {
-          const waitMs = RETRY_DELAY_MS * attempt;
+          const waitMs = retryDelay(attempt);
+          console.log(
+            `[MEDIA] ${options.label} diulang dalam ` +
+              `${Math.ceil(waitMs / 1_000)} detik`
+          );
           await sleep(waitMs);
         }
       }

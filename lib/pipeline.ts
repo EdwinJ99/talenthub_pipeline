@@ -36,14 +36,14 @@ type AccountCountryStatus = "indonesian" | "uncertain" | "non_indonesian";
 const MIN_FOLLOWERS = 5_000;
 
 // Maksimal post yang di-enrich dan disimpan dalam satu eksekusi.
-
-const POST_BATCH_LIMIT = 12;
+const POST_BATCH_LIMIT = 10;
 
 // Batas pencarian metadata. Ini bukan jumlah post yang disimpan.
-
 const MAX_SCRAPE_DEPTH = 100;
 
 const TOP_CONTENT_LIMIT = 5;
+
+const MAX_METRICS_SAMPLE = 12;
 
 const ENRICHMENT_CONCURRENCY = 2;
 
@@ -251,11 +251,8 @@ export async function processCreator(
     : [];
 
   // Untuk menemukan post lama di bawah data yang sudah tersimpan, scraper
-
   // perlu membaca melewati post yang sudah ada. Walaupun demikian, yang
-
   // di-enrich dan disimpan tetap maksimal POST_BATCH_LIMIT.
-
   const scrapeDepth = Math.min(
     MAX_SCRAPE_DEPTH,
 
@@ -327,7 +324,6 @@ export async function processCreator(
     );
 
     // Gabungkan bila profile-details juga membawa beberapa post.
-
     profile.posts = [...profile.posts, ...scrapedInstagramPosts];
   }
 
@@ -347,31 +343,17 @@ export async function processCreator(
 
   /*
 
-
-
    * Pemilihan incremental:
-
-
 
    * - satu run maksimal 10 post;
 
-
-
    * - post baru selalu diprioritaskan;
-
-
 
    * - slot yang tersisa diisi post lama/missing yang belum tersimpan;
 
-
-
    * - jika tidak ada post baru, ambil maksimal 10 post lama;
 
-
-
    * - post lama di database tidak pernah dihapus.
-
-
 
    */
 
@@ -414,9 +396,7 @@ export async function processCreator(
   const remainingSlots = POST_BATCH_LIMIT - selectedNewPosts.length;
 
   // Termasuk post yang lebih lama dari data database dan post yang sempat
-
   // berlubang/gagal tersimpan di antara rentang tanggal yang sudah ada.
-
   const backfillPosts = unprocessedPosts
 
     .filter((post) => !selectedNewUrls.has(post.postUrl.trim()))
@@ -769,17 +749,13 @@ export async function processCreator(
 
   /*
 
-
-
    * Hitung ulang Top 5 dari seluruh post creator yang sudah tersimpan.
+   * MAX_METRICS_SAMPLE hanya dipakai untuk menghitung metrik creator, bukan
+   * untuk membatasi kandidat Top Content.
 
    * Binary lama dipertahankan jika post masih masuk Top 5. Binary post yang
 
-
-
    * keluar dari Top 5 dibersihkan agar database hanya menyimpan 5 thumbnail.
-
-
 
    */
 
@@ -921,12 +897,12 @@ export async function processCreator(
       `${downloadedThumbnailByPostUrl.size} thumbnail baru didownload`
   );
 
-  // Metrik creator dihitung ulang dari seluruh post yang sudah tersimpan.
-  // Query ini tidak menjalankan scraping/enrichment lagi, sehingga tetap ringan.
-  const allStoredPosts = await prisma.dtl_creator_posts.findMany({
+  const latestPosts = await prisma.dtl_creator_posts.findMany({
     where: { creator_id: creator.id },
 
     orderBy: { posted_at: "desc" },
+
+    take: MAX_METRICS_SAMPLE,
 
     select: {
       caption: true,
@@ -952,12 +928,10 @@ export async function processCreator(
   });
 
   console.log(
-    `  [INFO] hitung metrics dari ${allStoredPosts.length} seluruh post di DB`
+    `  [INFO] hitung metrics dari ${latestPosts.length} post terakhir di DB`
   );
 
-  const videoPosts = allStoredPosts.filter(
-    (post) => safeMetric(post.views) > 0
-  );
+  const videoPosts = latestPosts.filter((post) => safeMetric(post.views) > 0);
 
   const brandedVideoPosts = videoPosts.filter((post) => post.is_endorse);
 
@@ -968,7 +942,7 @@ export async function processCreator(
   );
 
   const insights = computeInsightsFromPosts(
-    allStoredPosts.map((post) => ({
+    latestPosts.map((post) => ({
       caption: post.caption ?? "",
 
       likes: safeMetric(post.likes),
@@ -990,7 +964,7 @@ export async function processCreator(
 
     profile.followers,
 
-    allStoredPosts.length
+    profile.totalPost
   );
 
   await prisma.mst_creators.update({
