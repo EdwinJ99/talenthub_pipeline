@@ -1,6 +1,6 @@
 import type { SocialPlatform } from "./social-platform";
 import { contentIdentityMatches, getContentIdentity } from "./content-url";
-import { withApifyClient } from "./apify-token-pool";
+import { assertRunSucceeded, withApifyClient } from "./apify-token-pool";
 
 export interface RawPost {
   caption: string;
@@ -13,7 +13,7 @@ export interface RawPost {
   postedAt: string;
   postUrl: string;
   thumbnailUrl?: string;
-  locationName?: string;
+  locationName?: string; // dipakai pipeline.ts untuk deteksi kota (mostCommonLocation)
   ownerUsername?: string;
 }
 
@@ -41,84 +41,260 @@ function normalizeCount(value: unknown): number {
   return Math.round(number);
 }
 
-function normalizePostedAt(value: unknown): string {
-  if (
-    typeof value !== "string" &&
-    typeof value !== "number" &&
-    !(value instanceof Date)
-  ) {
-    return "";
-  }
-
-  const date = new Date(value);
-
-  if (!Number.isFinite(date.getTime())) {
-    return "";
-  }
-
-  return date.toISOString();
-}
+// ============================================================================
+// ENRICHMENT — scrape ulang tiap URL post lewat scrapeContentUrl supaya
+// views/shares/saves/reposts AKURAT. Bulk scraper (apify/instagram-scraper
+// & clockworks/tiktok-scraper mode `profiles`) TIDAK reliable untuk field
+// ini — Instagram malah sama sekali nggak ngasih shares/saves di bulk mode.
+// ============================================================================
 
 // Jeda antar scrape ulang per-URL biar nggak langsung kena rate limit.
 const PER_URL_SCRAPE_DELAY_MS = 1200;
+
+// FIX: retry khusus untuk error yang TRANSIENT (429 dari Instagram, atau
+// actor kebetulan balikin post lain gara-gara session pengganti pas kena
+// 429). Sebelumnya sekali gagal langsung fallback ke data bulk (shares/
+// saves/views = 0), jadi kelihatan seolah-olah "cuma sebagian post valid"
+// padahal sebenarnya cuma keburu nyerah pas Instagram lagi throttle.
+const ENRICH_MAX_ATTEMPTS = 3;
+const ENRICH_RETRY_BASE_DELAY_MS = 3000; // 3s, lalu 6s
+
+function isRetryableEnrichError(err: unknown): boolean {
+  const message = String((err as any)?.message ?? "").toLowerCase();
+  return (
+    message.includes("429") ||
+    message.includes("too many requests") ||
+    message.includes("did not return the exact requested content") ||
+    message.includes("could not be found or is not public")
+  );
+}
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Scrape ulang SATU post lewat `scrapeContentUrl` (identity-verified) dan
+// Scrape ulang SATU post lewat scrapeContentUrl (identity-verified) dan
 // gabungkan hasilnya dengan `postedAt`/`locationName` yang cuma tersedia
-// dari listing bulk. Kalau gagal (post dihapus, dsb), fallback ke data
-// bulk apa adanya supaya satu post gagal tidak menggagalkan seluruh batch.
+// dari listing bulk. Retry beberapa kali kalau errornya transient (429,
+// atau actor balikin post yang salah gara-gara session pengganti). Kalau
+// semua percobaan gagal, fallback ke data bulk apa adanya supaya satu post
+// gagal tidak menggagalkan seluruh batch.
 async function enrichPostFromContentUrl(
   fallback: RawPost,
-  platform: "instagram" | "tiktok"
-): Promise<RawPost> {
-  if (!fallback.postUrl) return fallback;
+  platform: "instagram" | "tiktok",
+  expectedUsername?: string,
+  attempt = 1
+): Promise<{ post: RawPost; enriched: boolean }> {
+  if (!fallback.postUrl) return { post: fallback, enriched: false };
 
   try {
-    const metrics = await scrapeContentUrl(fallback.postUrl, platform);
+    const metrics = await scrapeContentUrl(
+      fallback.postUrl,
+      platform,
+      expectedUsername
+    );
     return {
-      caption: metrics.caption || fallback.caption,
-      likes: metrics.likes,
-      comments: metrics.comments,
-      views: metrics.views,
-      shares: metrics.shares,
-      saves: metrics.saves,
-      reposts: metrics.reposts,
-      postedAt: fallback.postedAt,
-      postUrl: metrics.scrapedContentUrl || fallback.postUrl,
-      thumbnailUrl: metrics.thumbnailUrl ?? fallback.thumbnailUrl,
-      locationName: fallback.locationName,
+      enriched: true,
+      post: {
+        caption: metrics.caption || fallback.caption,
+        likes: metrics.likes,
+        comments: metrics.comments,
+        views: metrics.views,
+        shares: metrics.shares,
+        saves: metrics.saves,
+        reposts: metrics.reposts,
+        postedAt: fallback.postedAt,
+        // Identitas post selalu berasal dari bulk scraper yang sudah
+        // diverifikasi. Actor detail hanya boleh memperbarui metrik.
+        postUrl: fallback.postUrl,
+        thumbnailUrl: metrics.thumbnailUrl ?? fallback.thumbnailUrl,
+        locationName: fallback.locationName,
+      },
     };
   } catch (err) {
+    if (isRetryableEnrichError(err) && attempt < ENRICH_MAX_ATTEMPTS) {
+      const waitMs = ENRICH_RETRY_BASE_DELAY_MS * attempt;
+      console.warn(
+        `  [RETRY] ${fallback.postUrl} gagal (attempt ${attempt}/${ENRICH_MAX_ATTEMPTS}), tunggu ${waitMs}ms:`,
+        (err as any)?.message
+      );
+      await delay(waitMs);
+      return enrichPostFromContentUrl(
+        fallback,
+        platform,
+        expectedUsername,
+        attempt + 1
+      );
+    }
+
     console.error(
-      `  [WARN] gagal scrape ulang detail post ${fallback.postUrl}:`,
+      `  [WARN] gagal scrape ulang detail post ${fallback.postUrl} (setelah ${attempt} percobaan):`,
       err
     );
-    return fallback;
+    return { post: fallback, enriched: false };
   }
 }
 
-// Scrape ulang SEMUA post dalam array secara berurutan (dengan jeda antar
-// panggilan) supaya nggak langsung kena rate limit di actor per-URL.
-export type EnrichPostsOptions = {
-  concurrency?: number;
-  dropFailed?: boolean;
-  expectedUsername?: string;
-};
-
-export async function enrichPosts(
+// Enrich SEMUA post dalam array dengan concurrency terbatas + retry.
+// PENTING: concurrency di sini menembak Instagram langsung (lewat actor
+// data-slayer/instagram-post-details), BUKAN dibatasi oleh jumlah token
+// Apify di pool. Instagram nge-throttle berdasarkan pola request actor,
+// jadi walau token Apify ada banyak, concurrency yang kegedean tetap akan
+// kena 429 dari Instagram. Default diturunkan ke 2 — sesuaikan naik
+// pelan-pelan sambil mengawasi log [RETRY]/[WARN], jangan langsung besar.
+//
+// Sengaja LEMPAR ERROR kalau semua post gagal di-enrich — supaya gagal
+// diam-diam (fallback ke data bulk yang shares/saves/reposts-nya 0) tidak
+// pernah terjadi tanpa disadari di pipeline pemanggilnya.
+async function enrichPosts(
   posts: RawPost[],
   platform: "instagram" | "tiktok",
-  options: EnrichPostsOptions = {}
+  options: {
+    concurrency?: number;
+    dropFailed?: boolean;
+    expectedUsername?: string;
+  } = {}
 ): Promise<RawPost[]> {
-  const enriched: RawPost[] = [];
-  for (const post of posts) {
-    enriched.push(await enrichPostFromContentUrl(post, platform));
-    await delay(PER_URL_SCRAPE_DELAY_MS);
+  const { concurrency = 1, dropFailed = false, expectedUsername } = options;
+  const results: Array<{
+    post: RawPost;
+    enriched: boolean;
+  } | null> = new Array(posts.length).fill(null);
+  let cursor = 0;
+
+  async function worker() {
+    while (true) {
+      const i = cursor++;
+      if (i >= posts.length) return;
+      results[i] = await enrichPostFromContentUrl(
+        posts[i],
+        platform,
+        expectedUsername
+      );
+    }
   }
-  return enriched;
+
+  const workerCount = Math.min(Math.max(1, concurrency), posts.length);
+  await Promise.all(Array.from({ length: workerCount }, worker));
+
+  const completedResults = results.filter(
+    (result): result is { post: RawPost; enriched: boolean } => result !== null
+  );
+  const successCount = completedResults.filter(
+    (result) => result.enriched
+  ).length;
+
+  console.log(
+    `  [ENRICH] ${platform}: ${successCount}/${posts.length} post berhasil di-enrich (concurrency=${workerCount})`
+  );
+
+  if (posts.length > 0 && successCount === 0) {
+    console.warn(
+      `  [ENRICH] Semua detail gagal. ${posts.length} post tetap memakai data bulk.`
+    );
+  }
+
+  if (dropFailed) {
+    return completedResults
+      .filter((result) => result.enriched)
+      .map((result) => result.post);
+  }
+
+  return completedResults.map((result) => result.post);
+}
+
+// export supaya bisa dipanggil manual dari route (setelah gating check)
+export { enrichPosts };
+
+// BARU: bulk fetch instagram posts TANPA enrichment — dipakai buat quick search
+// biar cek Indonesia bisa jalan duluan sebelum buang waktu enrich.
+export async function fetchInstagramBulkPosts(
+  username: string,
+  sinceDate?: Date,
+  limit = 14
+): Promise<RawPost[]> {
+  const normalizedUsername = username.trim().replace(/^@+/, "").toLowerCase();
+
+  return withApifyClient(async (client) => {
+    const input: Record<string, any> = {
+      directUrls: [`https://www.instagram.com/${normalizedUsername}/`],
+      resultsType: "posts",
+      resultsLimit: limit,
+    };
+    if (sinceDate)
+      input.onlyPostsNewerThan = sinceDate.toISOString().slice(0, 10);
+
+    const run = await client.actor("apify/instagram-scraper").call(input);
+    assertRunSucceeded(run);
+    const { items } = await client.dataset(run.defaultDatasetId).listItems();
+
+    return (items as any[])
+      .map((p: any): RawPost | null => {
+        const ownerUsername = String(
+          p.ownerUsername ??
+            p.owner?.username ??
+            p.user?.username ??
+            p.username ??
+            ""
+        )
+          .trim()
+          .replace(/^@+/, "")
+          .toLowerCase();
+
+        if (ownerUsername && ownerUsername !== normalizedUsername) {
+          console.warn(
+            `  [BULK] Post dibuang: ${ownerUsername} !== ${normalizedUsername}`
+          );
+          return null;
+        }
+
+        const postUrl = String(
+          p.url ??
+            p.postUrl ??
+            (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : "")
+        ).trim();
+        const postedAt = p.timestamp ?? p.takenAtIso ?? p.takenAt ?? "";
+
+        if (
+          !postUrl ||
+          !postedAt ||
+          Number.isNaN(new Date(postedAt).getTime())
+        ) {
+          console.warn(
+            `  [BULK] Post invalid dibuang: ${postUrl || "tanpa URL"}`
+          );
+          return null;
+        }
+
+        return {
+          caption: p.caption ?? "",
+          likes: normalizeCount(p.likesCount ?? p.likeCount ?? p.likes),
+          comments: normalizeCount(
+            p.commentsCount ?? p.commentCount ?? p.comments
+          ),
+          views: normalizeCount(p.videoViewCount ?? p.viewsCount ?? p.views),
+          shares: normalizeCount(p.shareCount ?? p.sharesCount ?? p.shares),
+          saves: normalizeCount(p.saveCount ?? p.savesCount ?? p.saves),
+          reposts: normalizeCount(p.repostCount ?? p.repostsCount ?? p.reposts),
+          postedAt: new Date(postedAt).toISOString(),
+          postUrl,
+          thumbnailUrl: p.displayUrl ?? p.display_url,
+          locationName: p.locationName,
+          ownerUsername: ownerUsername || undefined,
+        };
+      })
+      .filter((post): post is RawPost => post !== null)
+      .filter(
+        (post, index, posts) =>
+          posts.findIndex((candidate) => candidate.postUrl === post.postUrl) ===
+          index
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime()
+      )
+      .slice(0, limit);
+  });
 }
 
 // ============================================================================
@@ -173,18 +349,12 @@ export async function scrapeInstagramProfileDetails(
 //
 // Tahap 1 (bulk, murah): dapetin daftar URL post + postedAt + locationName.
 // Tahap 2: tiap URL di-scrape ULANG lewat scrapeContentUrl (identity
-// verified) untuk metrik engagement yang akurat.
-//
-// sinceDate (opsional):
-//   - TIDAK diisi (creator baru): ambil sampai `limit` post terbaru apa
-//     adanya, tanpa batas tanggal.
-//   - DIISI (creator lama, sudah pernah di-scrape): cuma post yang
-//     di-upload SEJAK tanggal itu yang diambil (dikirim ke actor lewat
-//     onlyPostsNewerThan) — jauh lebih hemat kuota untuk refresh berkala.
+// verified) untuk metrik engagement yang akurat — INI WAJIB JALAN, jangan
+// pernah dilewati, karena bulk mode Instagram tidak ngasih shares/saves.
 export async function scrapeInstagramPosts(
   username: string,
   sinceDate?: Date,
-  limit = 20,
+  limit = 12,
   options: {
     enrichPosts?: boolean;
   } = {}
@@ -194,9 +364,6 @@ export async function scrapeInstagramPosts(
       directUrls: [`https://www.instagram.com/${username}/`],
       resultsType: "posts",
       resultsLimit: limit,
-      // Pinned post lama tidak boleh menggantikan post terbaru
-      // dalam sampel perhitungan performance/ER.
-      skipPinnedPosts: true,
     };
 
     if (sinceDate) {
@@ -205,78 +372,31 @@ export async function scrapeInstagramPosts(
     }
 
     const run = await client.actor("apify/instagram-scraper").call(input);
-    const { items } = await client
-      .dataset(run.defaultDatasetId)
-      .listItems({ limit });
+    const { items } = await client.dataset(run.defaultDatasetId).listItems();
 
-    const normalizedPosts = (items as any[]).map(
-      (p: any): RawPost => ({
-        caption: p.caption ?? "",
-        likes: normalizeCount(p.likesCount ?? p.likeCount ?? p.likes),
-        comments: normalizeCount(
-          p.commentsCount ?? p.commentCount ?? p.comments
-        ),
-        views: normalizeCount(
-          p.videoViewCount ??
-            p.videoPlayCount ??
-            p.viewsCount ??
-            p.views
-        ),
-        shares: normalizeCount(
-          p.shareCount ?? p.sharesCount ?? p.shares
-        ),
-        saves: normalizeCount(
-          p.saveCount ?? p.savesCount ?? p.saves
-        ),
-        reposts: normalizeCount(
-          p.repostCount ?? p.repostsCount ?? p.reposts
-        ),
-        postedAt: normalizePostedAt(
-          p.timestamp ?? p.takenAtIso ?? p.takenAt
-        ),
-        postUrl:
-          p.url ??
-          (p.shortCode
-            ? `https://www.instagram.com/p/${p.shortCode}/`
-            : ""),
-        thumbnailUrl:
-          p.displayUrl ?? p.display_url ?? p.thumbnailUrl,
-        locationName: p.locationName ?? p.location?.name,
-      })
-    );
-
-    // Hilangkan post tanpa identitas/tanggal valid dan URL duplikat.
-    const uniquePosts = new Map<string, RawPost>();
-
-    for (const post of normalizedPosts) {
-      const postedTime = new Date(post.postedAt).getTime();
-
-      if (!post.postUrl || !Number.isFinite(postedTime)) {
-        console.warn(
-          `  [SKIP POST] URL/tanggal tidak valid: ${post.postUrl || "tanpa URL"}`
-        );
-        continue;
-      }
-
-      if (!uniquePosts.has(post.postUrl)) {
-        uniquePosts.set(post.postUrl, post);
-      }
-    }
-
-    // Apify sudah melewati pinned post. Sorting ini menjadi pengaman
-    // tambahan agar urutan akhir selalu berdasarkan tanggal terbaru.
-    return Array.from(uniquePosts.values())
-      .sort(
-        (a, b) =>
-          new Date(b.postedAt).getTime() -
-          new Date(a.postedAt).getTime()
-      )
-      .slice(0, limit);
+    return (items as any[]).slice(0, limit).map((p: any) => ({
+      caption: p.caption ?? "",
+      likes: normalizeCount(p.likesCount ?? p.likeCount ?? p.likes),
+      comments: normalizeCount(p.commentsCount ?? p.commentCount ?? p.comments),
+      views: normalizeCount(p.videoViewCount ?? p.viewsCount ?? p.views),
+      shares: normalizeCount(p.shareCount ?? p.sharesCount ?? p.shares),
+      saves: normalizeCount(p.saveCount ?? p.savesCount ?? p.saves),
+      reposts: normalizeCount(p.repostCount ?? p.repostsCount ?? p.reposts),
+      postedAt: p.timestamp ?? p.takenAtIso ?? new Date().toISOString(),
+      // FIX: `p.url ?? p.shortCode ? A : B` tanpa kurung salah presedensi
+      // (?? lebih tinggi dari ?:), jadi kebaca (p.url ?? p.shortCode) ? A : B
+      // -> p.url malah ke-skip. Sekarang eksplisit dikurung.
+      postUrl:
+        p.url ??
+        (p.shortCode ? `https://www.instagram.com/p/${p.shortCode}/` : ""),
+      thumbnailUrl: p.displayUrl ?? p.display_url,
+      locationName: p.locationName,
+    })) as RawPost[];
   });
 
-  console.log(
-    `  [INSTAGRAM] ${bulkPosts.length} post terbaru dipilih; pinned post dilewati`
-  );
+  if (options.enrichPosts === false) {
+    return bulkPosts;
+  }
 
   return enrichPosts(bulkPosts, "instagram");
 }
@@ -309,22 +429,17 @@ export async function scrapeInstagramProfiles(
 // buat dapetin URL+postedAt, lalu tiap post di-scrape ulang lewat
 // scrapeContentUrl untuk metrik yang akurat.
 //
-// sinceDate (opsional): TikTok actor tidak punya filter tanggal bawaan
-// seperti Instagram, jadi difilter manual di sini berdasarkan
-// createTimeISO — cuma post sejak sinceDate yang ikut diproses.
+// enrichPosts: false -> khusus dipakai validateUsernames (cek valid/invalid
+// doang), supaya nggak buang kuota Apify buat enrich post yang datanya
+// nggak dipakai sama
 export async function scrapeTiktokProfiles(
   usernames: string[],
   sinceDate?: Date,
-  resultsPerPage = 20,
-  options: {
-    enrichPosts?: boolean;
-  } = {}
+  resultsPerPage = 14,
+  options: { enrichPosts?: boolean } = {}
 ): Promise<RawProfile[]> {
-
-  const shouldEnrich =
-    options.enrichPosts !== false;
-
   if (usernames.length === 0) return [];
+  const { enrichPosts: shouldEnrich = true } = options;
 
   const items = await withApifyClient(async (client) => {
     const run = await client.actor("clockworks/tiktok-scraper").call({
@@ -354,9 +469,22 @@ export async function scrapeTiktokProfiles(
     grouped.set(key, [...(grouped.get(key) ?? []), item]);
   }
 
+  // FIX: filter balik ke usernames yang diminta. Sebelumnya semua author
+  // yang muncul di hasil actor langsung dipush ke `profiles` apa adanya —
+  // kalau actor kebetulan balikin item dengan authorMeta.name di luar yang
+  // diminta (related video, dsb), pemanggil yang cuma ambil elemen pertama
+  // (`profiles[0]`) bisa diam-diam dapat profile/post creator yang salah.
+  const requestedLower = new Set(usernames.map((u) => u.toLowerCase()));
   const profiles: RawProfile[] = [];
 
   for (const [username, groupedPosts] of grouped.entries()) {
+    if (!requestedLower.has(username.toLowerCase())) {
+      console.warn(
+        `  [SKIP] author "${username}" muncul di hasil TikTok scraper tapi tidak diminta — dibuang`
+      );
+      continue;
+    }
+
     const author = groupedPosts[0].authorMeta;
     const photoUrls = imageUrls(
       author.avatarLarger,
@@ -380,7 +508,9 @@ export async function scrapeTiktokProfiles(
       thumbnailUrl: p.videoMeta?.coverUrl ?? p.videoMeta?.originalCoverUrl,
     }));
 
-    const posts = await enrichPosts(bulkPosts, "tiktok");
+    const posts = shouldEnrich
+      ? await enrichPosts(bulkPosts, "tiktok")
+      : bulkPosts;
 
     profiles.push({
       username,
@@ -399,6 +529,8 @@ export async function scrapeTiktokProfiles(
   return profiles;
 }
 
+// Validasi username doang -> jangan enrich, buang-buang kuota kalau
+// hasilnya nggak dipakai.
 export async function validateUsernames(
   usernames: string[],
   platform: "instagram" | "tiktok"
@@ -407,8 +539,10 @@ export async function validateUsernames(
 
   const profiles =
     platform === "instagram"
-      ? await scrapeInstagramProfileDetails(usernames)
-      : await scrapeTiktokProfiles(usernames);
+      ? await scrapeInstagramProfileDetails(usernames) // IG: profil doang, memang gak ada posts
+      : await scrapeTiktokProfiles(usernames, undefined, 14, {
+          enrichPosts: false,
+        });
 
   const foundUsernames = new Set(
     profiles.filter((p) => p.isValid).map((p) => p.username.toLowerCase())
@@ -419,6 +553,9 @@ export async function validateUsernames(
     valid: foundUsernames.has(u.toLowerCase()),
   }));
 }
+
+// ---- Sisanya (ContentMetrics, scrapeContentUrl, resolveShortUrl, dst)
+//      TIDAK berubah dari versi kamu sebelumnya — biarkan apa adanya. ----
 
 export interface ContentMetrics {
   contentUrl: string;
@@ -457,6 +594,18 @@ function imageUrls(...values: unknown[]): string[] {
   return [...new Set(result)];
 }
 
+function isApifyUrl(value?: string): boolean {
+  if (!value) return false;
+
+  try {
+    const hostname = new URL(value).hostname.toLowerCase();
+
+    return hostname === "api.apify.com" || hostname.endsWith(".apify.com");
+  } catch {
+    return false;
+  }
+}
+
 function returnedContentUrl(
   item: Record<string, unknown>,
   platform: SocialPlatform
@@ -473,8 +622,6 @@ function returnedContentUrl(
   const candidates =
     platform === "instagram"
       ? [
-          // Input/permalink and shortcode identify the post. A generic `url`
-          // from Instagram actors may point to the author profile or CDN.
           text("inputUrl"),
           text("postUrl"),
           text("permalink"),
@@ -536,15 +683,14 @@ async function resolveShortUrl(value: string): Promise<string> {
 
 export async function scrapeContentUrl(
   value: string,
-  expectedPlatform?: string | null
+  expectedPlatform?: string | null,
+  expectedUsername?: string
 ): Promise<ContentMetrics> {
   const resolvedUrl = await resolveShortUrl(value);
   const requested = getContentIdentity(resolvedUrl, expectedPlatform);
   const contentUrl = requested.normalizedUrl;
   const platform = requested.platform;
   return withApifyClient(async (client) => {
-    // The general Instagram actor does not expose saves/reposts for a direct post.
-    // This URL-specific actor returns those engagement fields and a stable thumbnail field.
     const run =
       platform === "instagram"
         ? await client
@@ -555,7 +701,7 @@ export async function scrapeContentUrl(
             postURLs: [contentUrl],
             scrapeRelatedVideos: false,
             resultsPerPage: 1,
-            shouldDownloadCovers: true,
+            shouldDownloadCovers: false,
           })
         : platform === "youtube"
         ? await client.actor("streamers/youtube-scraper").call({
@@ -576,9 +722,6 @@ export async function scrapeContentUrl(
       .dataset(run.defaultDatasetId)
       .listItems({ limit: 10 });
     const actorItems = items as Record<string, any>[];
-    // Prefer an exact actor result when its identity is available. Some actors,
-    // especially Instagram post-details, return a media/CDN URL or a different
-    // URL field even though the run was requested for one exact content URL.
     const matchingItem = actorItems.find((candidate) => {
       const candidateUrl = returnedContentUrl(candidate, platform);
       if (!candidateUrl) return false;
@@ -591,17 +734,18 @@ export async function scrapeContentUrl(
         return false;
       }
     });
-    // URL-specific actors occasionally omit the permalink from their payload.
-    // A single result is still tied to the one URL submitted to that actor. If a
-    // returned identity is present, however, it must remain an exact match.
-    const soleItemWithoutIdentity =
-      actorItems.length === 1 && !returnedContentUrl(actorItems[0], platform)
-        ? actorItems[0]
-        : undefined;
-    const item = matchingItem ?? soleItemWithoutIdentity;
+    const item = matchingItem;
     if (!actorItems[0])
       throw new Error("Content could not be found or is not public");
     if (!item) {
+      console.warn("  [CONTENT MISMATCH]", {
+        expectedUsername,
+        requestedUrl: requested.normalizedUrl,
+        requestedContentId: requested.contentId,
+        returnedUrls: actorItems.map((candidate) =>
+          returnedContentUrl(candidate, platform)
+        ),
+      });
       throw new Error("Scraper did not return the exact requested content");
     }
     if (item.error) throw new Error(String(item.error));
@@ -703,9 +847,7 @@ export async function scrapeContentUrl(
         item.covers,
         item.cover,
         item.originCover,
-        item.dynamicCover,
-        item.downloadedCovers,
-        item.downloadedCover
+        item.dynamicCover
       );
       return {
         contentUrl,

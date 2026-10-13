@@ -1,23 +1,4 @@
 import sharp from "sharp";
-import { setDefaultResultOrder } from "node:dns";
-import net from "node:net";
-
-// VPS/Docker kadang menerima alamat IPv6 CDN yang tidak memiliki rute stabil.
-// Dahulukan IPv4, tetapi tetap izinkan Node memakai IPv6 sebagai fallback.
-setDefaultResultOrder("ipv4first");
-
-// FIX ETIMEDOUT ke CDN Instagram (fbcdn.net / cdninstagram.com):
-// Node memakai "happy eyeballs" (autoSelectFamily). Default-nya cuma 250 ms
-// per alamat sebelum percobaan dibatalkan dan pindah ke alamat berikutnya.
-// Edge CDN yang dikasih scraper kadang berada jauh (contoh: Brasil), RTT dari
-// VPS bisa > 250 ms, sehingga handshake TCP selalu keburu dibatalkan
-// (stack trace: internalConnectMultipleTimeout). Naikkan batasnya.
-try {
-  net.setDefaultAutoSelectFamily(true);
-  net.setDefaultAutoSelectFamilyAttemptTimeout(5_000);
-} catch {
-  // Node versi lama tanpa API ini: abaikan, perilaku default tetap jalan.
-}
 
 export type ImagePlatform = "instagram" | "tiktok";
 export type ImageKind = "profile" | "thumbnail";
@@ -44,27 +25,10 @@ type DownloadOptions = {
 };
 
 const DOWNLOAD_TIMEOUT_MS = 60_000;
-const RETRY_DELAYS_MS = [3_000, 8_000] as const;
+const RETRY_DELAY_MS = 3_000;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function retryDelay(attempt: number): number {
-  const baseDelay =
-    RETRY_DELAYS_MS[Math.min(attempt - 1, RETRY_DELAYS_MS.length - 1)] ??
-    8_000;
-  const jitter = Math.floor(Math.random() * 2_000);
-
-  return baseDelay + jitter;
-}
-
-function sourceHost(value: string): string {
-  try {
-    return new URL(value).hostname;
-  } catch {
-    return "invalid-url";
-  }
 }
 
 function errorMessage(error: unknown): string {
@@ -75,10 +39,6 @@ function errorMessage(error: unknown): string {
   return [error.message, cause?.code, cause?.message].filter(Boolean).join(" | ");
 }
 
-// Error permanen: retry ke URL yang sama tidak akan membantu (biasanya URL
-// signed Instagram/TikTok sudah kedaluwarsa atau gambar sudah dihapus).
-class PermanentDownloadError extends Error {}
-
 function referer(platform: ImagePlatform): string {
   return platform === "tiktok"
     ? "https://www.tiktok.com/"
@@ -88,7 +48,7 @@ function referer(platform: ImagePlatform): string {
 function validateRemoteUrl(value: string): URL {
   const url = new URL(value);
   if (url.protocol !== "https:" && url.protocol !== "http:") {
-    throw new PermanentDownloadError("URL gambar harus HTTP/HTTPS");
+    throw new Error("URL gambar harus HTTP/HTTPS");
   }
 
   const host = url.hostname.toLowerCase();
@@ -103,7 +63,7 @@ function validateRemoteUrl(value: string): URL {
     /^192\.168\./.test(host) ||
     /^172\.(1[6-9]|2\d|3[01])\./.test(host)
   ) {
-    throw new PermanentDownloadError("Host gambar lokal/private tidak diizinkan");
+    throw new Error("Host gambar lokal/private tidak diizinkan");
   }
   return url;
 }
@@ -178,17 +138,7 @@ async function downloadOnce(
     });
 
     if (!response.ok) {
-      const message = `download HTTP ${response.status} ${response.statusText}`;
-      // 4xx selain 408/429 = permanen (URL expired/dihapus/diblokir).
-      if (
-        response.status >= 400 &&
-        response.status < 500 &&
-        response.status !== 408 &&
-        response.status !== 429
-      ) {
-        throw new PermanentDownloadError(message);
-      }
-      throw new Error(message);
+      throw new Error(`download HTTP ${response.status} ${response.statusText}`);
     }
 
     const mimeType = String(response.headers.get("content-type") ?? "")
@@ -197,9 +147,7 @@ async function downloadOnce(
       .toLowerCase();
 
     if (!mimeType.startsWith("image/")) {
-      throw new PermanentDownloadError(
-        `response bukan gambar: ${mimeType || "unknown"}`
-      );
+      throw new Error(`response bukan gambar: ${mimeType || "unknown"}`);
     }
 
     // Tidak ada batas ukuran file. Jika optimasi gagal, file asli tetap disimpan.
@@ -237,26 +185,15 @@ export async function downloadImageWithRetry(
         lastError = error;
         console.warn(
           `[MEDIA] ${options.label} gagal ${attempt}/${attempts}: ` +
-            `${errorMessage(error)} | host=${sourceHost(candidate)}`
+            errorMessage(error)
         );
-
-        // Error permanen: jangan buang waktu retry URL yang sama.
-        if (error instanceof PermanentDownloadError) break;
-
         if (attempt < attempts) {
-          const waitMs = retryDelay(attempt);
-          console.log(
-            `[MEDIA] ${options.label} diulang dalam ` +
-              `${Math.ceil(waitMs / 1_000)} detik`
-          );
+          const waitMs = RETRY_DELAY_MS * attempt;
           await sleep(waitMs);
         }
       }
     }
-    console.error(
-      `[MEDIA] Kandidat gagal untuk ${options.label}:`,
-      errorMessage(lastError)
-    );
+    console.error(`[MEDIA] Kandidat gagal untuk ${options.label}`, lastError);
   }
 
   return null;
