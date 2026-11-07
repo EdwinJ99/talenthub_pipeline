@@ -2,6 +2,7 @@ import { Prisma, PrismaClient } from "@prisma/client";
 
 import {
   enrichPosts,
+  scrapeContentUrl,
   scrapeInstagramProfileDetails,
   scrapeInstagramPosts,
   scrapeTiktokProfiles,
@@ -177,35 +178,260 @@ async function removeCreatorIfExists(
   }
 }
 
-async function downloadTopContentThumbnails(
-  posts: RawPost[],
+type ThumbnailDownloadTask = {
+  postUrl: string;
+  candidates: string[];
+};
 
-  platform: "instagram" | "tiktok"
+function normalizePostUrlKey(value: string | null | undefined): string {
+  const raw = String(value ?? "").trim();
+  if (!raw) return "";
+
+  try {
+    const url = new URL(raw);
+    const host = url.hostname.toLowerCase().replace(/^www\./, "");
+    const path = url.pathname.replace(/\/+$/, "");
+    return `${host}${path}`.toLowerCase();
+  } catch {
+    return raw.replace(/\/+$/, "").toLowerCase();
+  }
+}
+
+function getThumbnailCandidates(
+  post: RawPost & { thumbnailCandidates?: string[] }
+): string[] {
+  return [
+    ...new Set(
+      [...(post.thumbnailCandidates ?? []), post.thumbnailUrl ?? ""]
+        .map((value) => String(value ?? "").trim())
+        .filter((value) => /^https?:\/\//i.test(value))
+    ),
+  ];
+}
+
+async function downloadTopContentThumbnails(
+  posts: ThumbnailDownloadTask[],
+  platform: "instagram" | "tiktok",
+  expectedUsername: string
 ): Promise<Map<string, DownloadedImage>> {
   const downloadedByPostUrl = new Map<string, DownloadedImage>();
 
-  // Sengaja sequential agar tidak membanjiri CDN Instagram/TikTok dan
-
-  // mengurangi kemungkinan ETIMEDOUT pada VPS.
-
+  // Tetap sequential agar tidak membanjiri CDN Instagram/TikTok.
   for (const post of posts) {
-    const downloaded = await downloadImageWithRetry([post.thumbnailUrl], {
+    const initialCandidates = [...new Set(post.candidates)];
+
+    let downloaded = await downloadImageWithRetry(initialCandidates, {
       platform,
-
       kind: "thumbnail",
-
       label: `thumbnail ${post.postUrl}`,
-
       attempts: 3,
     });
 
+    // Jika URL bulk/detail gagal, ambil ulang kandidat gambar dari detail post.
+    // Ini juga menangani post lama yang tidak masuk scrape depth saat ini.
+    if (!downloaded) {
+      try {
+        console.log(`  [MEDIA] mencari URL thumbnail alternatif: ${post.postUrl}`);
+        const details = await scrapeContentUrl(
+          post.postUrl,
+          platform,
+          expectedUsername
+        );
+
+        const detailCandidates = [
+          ...new Set(
+            [
+              ...(details.thumbnailCandidates ?? []),
+              details.thumbnailUrl ?? "",
+            ]
+              .map((value) => String(value ?? "").trim())
+              .filter((value) => /^https?:\/\//i.test(value))
+          ),
+        ];
+
+        const tried = new Set(initialCandidates);
+        const alternatives = detailCandidates.filter((url) => !tried.has(url));
+
+        if (alternatives.length > 0) {
+          downloaded = await downloadImageWithRetry(alternatives, {
+            platform,
+            kind: "thumbnail",
+            label: `thumbnail alternatif ${post.postUrl}`,
+            attempts: 3,
+          });
+        } else {
+          console.warn(`  [MEDIA] tidak ada kandidat URL alternatif: ${post.postUrl}`);
+        }
+      } catch (error) {
+        console.warn(
+          `  [MEDIA] gagal mengambil ulang detail thumbnail ${post.postUrl}:`,
+          error
+        );
+      }
+    }
+
     if (downloaded) {
       downloadedByPostUrl.set(post.postUrl, downloaded);
+    } else {
+      console.error(
+        `  [MEDIA] thumbnail belum tersimpan: ${post.postUrl}; ` +
+          `kandidat awal=${initialCandidates.length}`
+      );
     }
   }
 
   return downloadedByPostUrl;
 }
+
+async function refreshTopContentThumbnails(
+  creatorId: number,
+  platform: "instagram" | "tiktok",
+  expectedUsername: string,
+  sourcePosts: RawPost[] = []
+): Promise<{ topCount: number; readyCount: number; downloadedCount: number }> {
+  const postsForRanking = await prisma.dtl_creator_posts.findMany({
+    where: { creator_id: creatorId },
+    orderBy: { posted_at: "desc" },
+    select: {
+      id: true,
+      post_url: true,
+      likes: true,
+      comments: true,
+      views: true,
+      shares: true,
+      saves: true,
+      reposts: true,
+      posted_at: true,
+      thumbnail_data: true,
+      thumbnail_mime_type: true,
+      thumbnail_updated_at: true,
+    },
+  });
+
+  const topFiveDatabasePosts = [...postsForRanking]
+    .sort((a, b) => {
+      const scoreA =
+        safeMetric(a.likes) +
+        safeMetric(a.comments) +
+        safeMetric(a.shares) +
+        safeMetric(a.saves) +
+        safeMetric(a.reposts) +
+        safeMetric(a.views) * 0.01;
+      const scoreB =
+        safeMetric(b.likes) +
+        safeMetric(b.comments) +
+        safeMetric(b.shares) +
+        safeMetric(b.saves) +
+        safeMetric(b.reposts) +
+        safeMetric(b.views) * 0.01;
+
+      if (scoreB !== scoreA) return scoreB - scoreA;
+      return (b.posted_at?.getTime() ?? 0) - (a.posted_at?.getTime() ?? 0);
+    })
+    .slice(0, TOP_CONTENT_LIMIT);
+
+  const topContentIds = topFiveDatabasePosts.map((post) => post.id);
+
+  // Gabungkan kandidat dari bulk scrape dan hasil enrich. Normalisasi URL
+  // agar www/non-www dan trailing slash tidak membuat post gagal ditemukan.
+  const candidatesByPostUrl = new Map<string, string[]>();
+  for (const sourcePost of sourcePosts) {
+    const key = normalizePostUrlKey(sourcePost.postUrl);
+    if (!key) continue;
+
+    const previous = candidatesByPostUrl.get(key) ?? [];
+    candidatesByPostUrl.set(
+      key,
+      [...new Set([...previous, ...getThumbnailCandidates(sourcePost)])]
+    );
+  }
+
+  const missingTopThumbnails: ThumbnailDownloadTask[] = topFiveDatabasePosts
+    .filter((post) => !post.thumbnail_data && Boolean(post.post_url))
+    .map((post) => ({
+      postUrl: post.post_url as string,
+      candidates: candidatesByPostUrl.get(normalizePostUrlKey(post.post_url)) ?? [],
+    }));
+
+  const downloadedThumbnailByPostUrl = await downloadTopContentThumbnails(
+    missingTopThumbnails,
+    platform,
+    expectedUsername
+  );
+
+  // PENTING: Jangan gunakan interactive $transaction untuk binary thumbnail.
+  // Neon bisa perlu >5 detik untuk lima UPDATE bytea, sehingga terjadi P2028.
+  // Setiap update sendiri merupakan statement atomik PostgreSQL.
+  // Apabila satu update gagal, yang sudah berhasil tidak di-rollback.
+  for (const post of topFiveDatabasePosts) {
+    const postUrl = post.post_url ?? "";
+    const downloaded = downloadedThumbnailByPostUrl.get(postUrl);
+
+    await prisma.dtl_creator_posts.update({
+      where: { id: post.id },
+      data: {
+        is_top_content: true,
+        // Jangan menghapus binary lama apabila download baru gagal.
+        ...(downloaded
+          ? {
+              thumbnail_url: null,
+              thumbnail_data: downloaded.data,
+              thumbnail_mime_type: downloaded.mimeType,
+              thumbnail_updated_at: new Date(),
+            }
+          : {}),
+      },
+    });
+    console.log(
+      `  [TOP CONTENT SAVED] ${post.id} ${postUrl} ` +
+      (downloaded ? "binary baru tersimpan" : post.thumbnail_data ? "binary lama dipertahankan" : "masih tanpa thumbnail")
+    );
+  }
+
+  // Update flag untuk post lain SECARA TERPISAH.
+  // Binary non-top baru dibersihkan jika Top 5 sudah lengkap,
+  // untuk menghindari hilangnya gambar lama sewaktu CDN bermasalah.
+  const allTopHaveImages = topFiveDatabasePosts.every(
+    (post) =>
+      Boolean(post.thumbnail_data) ||
+      Boolean(downloadedThumbnailByPostUrl.get(post.post_url ?? ""))
+  );
+
+  await prisma.dtl_creator_posts.updateMany({
+    where: topContentIds.length > 0
+      ? { creator_id: creatorId, id: { notIn: topContentIds } }
+      : { creator_id: creatorId },
+    data: allTopHaveImages
+      ? {
+          is_top_content: false,
+          thumbnail_url: null,
+          thumbnail_data: null,
+          thumbnail_mime_type: null,
+          thumbnail_updated_at: null,
+        }
+      : { is_top_content: false },
+  });
+
+  const readyCount = topFiveDatabasePosts.filter(
+    (post) =>
+      Boolean(post.thumbnail_data) ||
+      Boolean(downloadedThumbnailByPostUrl.get(post.post_url ?? ""))
+  ).length;
+
+  console.log(
+    `  [TOP CONTENT] ${topFiveDatabasePosts.length} post ditandai; ` +
+      `thumbnail tersedia ${readyCount}/${topFiveDatabasePosts.length}; ` +
+      `${downloadedThumbnailByPostUrl.size} thumbnail baru didownload`
+  );
+
+  return {
+    topCount: topFiveDatabasePosts.length,
+    readyCount,
+    downloadedCount: downloadedThumbnailByPostUrl.size,
+  };
+}
+
+
 
 export async function processCreator(
   entry: SeedEntry,
@@ -439,15 +665,21 @@ export async function processCreator(
       `  [SKIP] ${profile.username}: tidak ada post baru atau post lama yang belum tersimpan`
     );
 
+    // Repair berjalan walaupun semua post telah tersimpan (resume-safe).
+    if (existingCreator?.id) {
+      await refreshTopContentThumbnails(
+        existingCreator.id,
+        profile.socialMedia,
+        profile.username,
+        validLatestPosts
+      );
+    }
+
     return {
       status: "skipped",
-
       reason: "no_changes",
-
       username: profile.username,
-
       creatorId: existingCreator?.id,
-
       postCount: 0,
     };
   }
@@ -684,83 +916,69 @@ export async function processCreator(
 
   // Incremental insert: post lama tidak pernah dihapus.
 
-  const insertResult = await prisma.$transaction(
-    async (tx) => {
-      let inserted = 0;
+  // Incremental insert tanpa interactive transaction yang panjang.
+  // Jika koneksi Neon terputus di tengah batch, post yang sudah tersimpan
+  // tetap aman dan run berikutnya akan melanjutkan sisanya.
+  let inserted = 0;
+  let skipped = 0;
 
-      let skipped = 0;
+  for (let index = 0; index < profile.posts.length; index++) {
+    const post = profile.posts[index];
 
-      for (let index = 0; index < profile.posts.length; index++) {
-        const post = profile.posts[index];
+    const duplicate = await prisma.dtl_creator_posts.findFirst({
+      where: {
+        creator_id: creator.id,
+        post_url: post.postUrl,
+      },
+      select: { id: true },
+    });
 
-        const duplicate = await tx.dtl_creator_posts.findFirst({
-          where: {
-            creator_id: creator.id,
-
-            post_url: post.postUrl,
-          },
-
-          select: { id: true },
-        });
-
-        if (duplicate) {
-          skipped++;
-
-          continue;
-        }
-
-        await tx.dtl_creator_posts.create({
-          data: {
-            creator_id: creator.id,
-
-            caption: post.caption,
-
-            likes: safeMetric(post.likes),
-
-            comments: safeMetric(post.comments),
-
-            views: safeMetric(post.views),
-
-            shares: safeMetric(post.shares),
-
-            saves: safeMetric(post.saves),
-
-            reposts: safeMetric(post.reposts),
-
-            post_url: post.postUrl,
-
-            posted_at: new Date(post.postedAt),
-
-            scraped_at: new Date(),
-
-            is_endorse:
-              endorseResults.find((result) => result.index === index)
-                ?.isEndorse ?? false,
-
-            is_top_content: false,
-
-            thumbnail_url: null,
-
-            thumbnail_data: null,
-
-            thumbnail_mime_type: null,
-
-            thumbnail_updated_at: null,
-          },
-        });
-
-        inserted++;
-      }
-
-      return { inserted, skipped };
-    },
-
-    {
-      maxWait: 10_000,
-
-      timeout: 30_000,
+    if (duplicate) {
+      skipped++;
+      continue;
     }
-  );
+
+    try {
+      await prisma.dtl_creator_posts.create({
+        data: {
+          creator_id: creator.id,
+          caption: post.caption,
+          likes: safeMetric(post.likes),
+          comments: safeMetric(post.comments),
+          views: safeMetric(post.views),
+          shares: safeMetric(post.shares),
+          saves: safeMetric(post.saves),
+          reposts: safeMetric(post.reposts),
+          post_url: post.postUrl,
+          posted_at: new Date(post.postedAt),
+          scraped_at: new Date(),
+          is_endorse:
+            endorseResults.find((result) => result.index === index)
+              ?.isEndorse ?? false,
+          is_top_content: false,
+          thumbnail_url: null,
+          thumbnail_data: null,
+          thumbnail_mime_type: null,
+          thumbnail_updated_at: null,
+        },
+      });
+      inserted++;
+    } catch (error) {
+      // Data bisa tersimpan oleh proses paralel atau run sebelumnya.
+      // P2002 adalah duplicate unique key, bukan kegagalan scraping.
+      if (
+        error instanceof Prisma.PrismaClientKnownRequestError &&
+        error.code === "P2002"
+      ) {
+        skipped++;
+        console.warn(`[INCREMENTAL DUPLICATE] ${post.postUrl}`);
+        continue;
+      }
+      throw error;
+    }
+  }
+
+  const insertResult = { inserted, skipped };
 
   console.log(
     `[INCREMENTAL] ${insertResult.inserted} post disimpan; ` +
@@ -783,142 +1001,11 @@ export async function processCreator(
 
    */
 
-  const postsForRanking = await prisma.dtl_creator_posts.findMany({
-    where: { creator_id: creator.id },
-
-    orderBy: { posted_at: "desc" },
-
-    select: {
-      id: true,
-
-      post_url: true,
-
-      likes: true,
-
-      comments: true,
-
-      views: true,
-
-      shares: true,
-
-      saves: true,
-
-      reposts: true,
-
-      posted_at: true,
-
-      thumbnail_data: true,
-
-      thumbnail_mime_type: true,
-
-      thumbnail_updated_at: true,
-    },
-  });
-
-  const topFiveDatabasePosts = [...postsForRanking]
-
-    .sort((a, b) => {
-      const scoreA =
-        safeMetric(a.likes) +
-        safeMetric(a.comments) +
-        safeMetric(a.shares) +
-        safeMetric(a.saves) +
-        safeMetric(a.reposts) +
-        safeMetric(a.views) * 0.01;
-
-      const scoreB =
-        safeMetric(b.likes) +
-        safeMetric(b.comments) +
-        safeMetric(b.shares) +
-        safeMetric(b.saves) +
-        safeMetric(b.reposts) +
-        safeMetric(b.views) * 0.01;
-
-      if (scoreB !== scoreA) return scoreB - scoreA;
-
-      return (b.posted_at?.getTime() ?? 0) - (a.posted_at?.getTime() ?? 0);
-    })
-
-    .slice(0, TOP_CONTENT_LIMIT);
-
-  const topContentIds = topFiveDatabasePosts.map((post) => post.id);
-
-  const topContentUrls = new Set(
-    topFiveDatabasePosts
-
-      .map((post) => post.post_url)
-
-      .filter((postUrl): postUrl is string => Boolean(postUrl))
-  );
-
-  const rawPostByUrl = new Map(
-    validLatestPosts.map((post) => [post.postUrl, post])
-  );
-
-  const missingTopThumbnails = topFiveDatabasePosts
-
-    .filter((post) => !post.thumbnail_data && Boolean(post.post_url))
-
-    .map((post) => rawPostByUrl.get(post.post_url as string))
-
-    .filter((post): post is RawPost => Boolean(post?.thumbnailUrl));
-
-  const downloadedThumbnailByPostUrl = await downloadTopContentThumbnails(
-    missingTopThumbnails,
-
-    profile.socialMedia
-  );
-
-  await prisma.$transaction(async (tx) => {
-    await tx.dtl_creator_posts.updateMany({
-      where: {
-        creator_id: creator.id,
-
-        id: { notIn: topContentIds },
-      },
-
-      data: {
-        is_top_content: false,
-
-        thumbnail_url: null,
-
-        thumbnail_data: null,
-
-        thumbnail_mime_type: null,
-
-        thumbnail_updated_at: null,
-      },
-    });
-
-    for (const post of topFiveDatabasePosts) {
-      const postUrl = post.post_url ?? "";
-
-      const downloaded = downloadedThumbnailByPostUrl.get(postUrl);
-
-      await tx.dtl_creator_posts.update({
-        where: { id: post.id },
-
-        data: {
-          is_top_content: true,
-
-          thumbnail_url: null,
-
-          thumbnail_data: downloaded?.data ?? post.thumbnail_data ?? null,
-
-          thumbnail_mime_type:
-            downloaded?.mimeType ?? post.thumbnail_mime_type ?? null,
-
-          thumbnail_updated_at: downloaded
-            ? new Date()
-            : post.thumbnail_updated_at ?? null,
-        },
-      });
-    }
-  });
-
-  console.log(
-    `  [TOP CONTENT] ${topContentIds.length} post ditandai; ` +
-      `${downloadedThumbnailByPostUrl.size} thumbnail baru didownload`
+  const topContentResult = await refreshTopContentThumbnails(
+    creator.id,
+    profile.socialMedia,
+    profile.username,
+    [...validLatestPosts, ...profile.posts]
   );
 
   // Metrik creator dihitung ulang dari seluruh post yang sudah tersimpan.
@@ -1075,7 +1162,7 @@ export async function processCreator(
 
   console.log(
     `  [MEDIA] profil=${profilePhotoSource}; ` +
-      `thumbnail=${downloadedThumbnailByPostUrl.size}/${TOP_CONTENT_LIMIT}`
+      `thumbnail=${topContentResult.readyCount}/${topContentResult.topCount}`
   );
 
   return {
@@ -1087,6 +1174,6 @@ export async function processCreator(
 
     postCount: profile.posts.length,
 
-    topContentCount: topContentUrls.size,
+    topContentCount: topContentResult.topCount,
   };
 }
